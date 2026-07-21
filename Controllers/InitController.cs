@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,7 @@ using BarberPro.DTOs.Citas;
 using BarberPro.DTOs.Dashboard;
 using BarberPro.DTOs.CierreCaja;
 using BarberPro.DTOs.Init;
+using Npgsql;
 
 namespace BarberPro.Controllers;
 
@@ -19,11 +21,15 @@ namespace BarberPro.Controllers;
 public class InitController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly string _connectionString;
 
-    public InitController(AppDbContext context)
+    public InitController(AppDbContext context, IConfiguration configuration)
     {
         _context = context;
+        _connectionString = context.Database.GetConnectionString()!;
     }
+
+    private static readonly JsonSerializerOptions _jsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     [HttpGet("encargado")]
     [Authorize(Roles = "Encargado")]
@@ -31,12 +37,86 @@ public class InitController : ControllerBase
     {
         var hoy = DateTime.UtcNow.Date;
 
-        var stats = await GetStatsHoy(hoy);
-        var barberos = await GetBarberos();
-        var servicios = await GetServicios();
-        var clientes = await GetClientes();
-        var citas = await GetCitas();
-        var cierres = await GetCierresCaja();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT 'stats', row_to_json(t) FROM (
+                SELECT
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                    COALESCE((SELECT SUM(s.""Precio"") FROM ""Citas"" c JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id"" WHERE c.""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""
+            ) t
+            UNION ALL
+            SELECT 'barberos', COALESCE((SELECT json_agg(row_to_json(b)) FROM (SELECT ""Codigo"" as ""codigo"", ""Nombre"" as ""nombre"", ""Estado"" as ""estado"", ""FechaCreacion"" as ""fechaCreacion"" FROM ""Barberos"" WHERE ""Estado"" != 'Inactivo' ORDER BY ""Nombre"") b), '[]'::json)
+            UNION ALL
+            SELECT 'servicios', COALESCE((SELECT json_agg(row_to_json(s)) FROM (SELECT ""Codigo"" as ""codigo"", ""Nombre"" as ""nombre"", ""Precio"" as ""precio"", ""Estado"" as ""estado"", ""FechaCreacion"" as ""fechaCreacion"" FROM ""Servicios"" WHERE ""Estado"" != 'Inactivo' ORDER BY ""Nombre"") s), '[]'::json)
+            UNION ALL
+            SELECT 'clientes', COALESCE((SELECT json_agg(row_to_json(c)) FROM (SELECT ""Codigo"" as ""codigo"", ""Nombre"" as ""nombre"", ""Telefono"" as ""telefono"", ""Estado"" as ""estado"", ""FechaCreacion"" as ""fechaCreacion"" FROM ""Clientes"" WHERE ""Estado"" != 'Inactivo' ORDER BY ""Nombre"") c), '[]'::json)
+            UNION ALL
+            SELECT 'citas', COALESCE((SELECT json_agg(row_to_json(c)) FROM (
+                SELECT c2.""Codigo"" as ""codigo"", c2.""CodigoGenerado"" as ""codigoGenerado"",
+                    cl.""Nombre"" as ""clienteNombre"", cl.""Telefono"" as ""clienteTelefono"",
+                    b.""Nombre"" as ""barberoNombre"",
+                    s.""Nombre"" as ""servicioNombre"", s.""Precio"" as ""servicioPrecio"",
+                    c2.""Fecha"" as ""fecha"", c2.""Hora""::text as ""hora"",
+                    c2.""Estado"" as ""estado"", c2.""FechaCreacion"" as ""fechaCreacion""
+                FROM ""Citas"" c2
+                JOIN ""Clientes"" cl ON c2.""ClienteId"" = cl.""Id""
+                JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
+                JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
+                WHERE c2.""Estado"" != 'Inactivo'
+                ORDER BY c2.""Fecha"" DESC, c2.""Hora""
+            ) c), '[]'::json)
+            UNION ALL
+            SELECT 'cierres', COALESCE((SELECT json_agg(row_to_json(cc)) FROM (
+                SELECT ""Id"" as ""id"", ""Fecha"" as ""fecha"", ""TotalRecaudado"" as ""totalRecaudado"",
+                    ""TotalCitas"" as ""totalCitas"", null as ""detalles"", ""FechaCreacion"" as ""fechaCreacion""
+                FROM ""CierreCaja"" ORDER BY ""Fecha"" DESC
+            ) cc), '[]'::json)
+        ";
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@hoy", hoy);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var stats = new DashboardStatsDto();
+        var barberos = new List<BarberoResponseDto>();
+        var servicios = new List<ServicioResponseDto>();
+        var clientes = new List<ClienteResponseDto>();
+        var citas = new List<CitaResponseDto>();
+        var cierres = new List<CierreCajaResponseDto>();
+
+        while (await reader.ReadAsync())
+        {
+            var tipo = reader.GetString(0);
+            var data = reader.GetString(1);
+
+            switch (tipo)
+            {
+                case "stats":
+                    stats = JsonSerializer.Deserialize<DashboardStatsDto>(data, _jsonOpts) ?? new();
+                    break;
+                case "barberos":
+                    barberos = JsonSerializer.Deserialize<List<BarberoResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+                case "servicios":
+                    servicios = JsonSerializer.Deserialize<List<ServicioResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+                case "clientes":
+                    clientes = JsonSerializer.Deserialize<List<ClienteResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+                case "citas":
+                    citas = JsonSerializer.Deserialize<List<CitaResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+                case "cierres":
+                    cierres = JsonSerializer.Deserialize<List<CierreCajaResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+            }
+        }
 
         return Ok(new InitEncargadoDto
         {
@@ -59,165 +139,62 @@ public class InitController : ControllerBase
 
         var hoy = DateTime.UtcNow.Date;
 
-        var stats = await GetStatsBarbero(barberoId, hoy);
-        var citas = await GetCitasBarbero(barberoId);
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT 'stats', row_to_json(t) FROM (
+                SELECT
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Fecha""::date = @hoy AND ""Estado"" IN ('Completada','Terminada')) AS ""citasCompletadasHoy"",
+                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Estado"" != 'Inactivo') AS ""totalCitas""
+            ) t
+            UNION ALL
+            SELECT 'citas', COALESCE((SELECT json_agg(row_to_json(c)) FROM (
+                SELECT c2.""Codigo"" as ""codigo"", c2.""CodigoGenerado"" as ""codigoGenerado"",
+                    cl.""Nombre"" as ""clienteNombre"", cl.""Telefono"" as ""clienteTelefono"",
+                    b.""Nombre"" as ""barberoNombre"",
+                    s.""Nombre"" as ""servicioNombre"", s.""Precio"" as ""servicioPrecio"",
+                    c2.""Fecha"" as ""fecha"", c2.""Hora""::text as ""hora"",
+                    c2.""Estado"" as ""estado"", c2.""FechaCreacion"" as ""fechaCreacion""
+                FROM ""Citas"" c2
+                JOIN ""Clientes"" cl ON c2.""ClienteId"" = cl.""Id""
+                JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
+                JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
+                WHERE c2.""BarberoId"" = @barberoId AND c2.""Estado"" != 'Inactivo'
+                ORDER BY c2.""Fecha"" DESC, c2.""Hora""
+            ) c), '[]'::json)
+        ";
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@barberoId", barberoId);
+        cmd.Parameters.AddWithValue("@hoy", hoy);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var stats = new DashboardStatsPersonalesDto();
+        var citas = new List<CitaResponseDto>();
+
+        while (await reader.ReadAsync())
+        {
+            var tipo = reader.GetString(0);
+            var data = reader.GetString(1);
+
+            switch (tipo)
+            {
+                case "stats":
+                    stats = JsonSerializer.Deserialize<DashboardStatsPersonalesDto>(data, _jsonOpts) ?? new();
+                    break;
+                case "citas":
+                    citas = JsonSerializer.Deserialize<List<CitaResponseDto>>(data, _jsonOpts) ?? new();
+                    break;
+            }
+        }
 
         return Ok(new InitBarberoDto
         {
             Stats = stats,
             Citas = citas
         });
-    }
-
-    private async Task<DashboardStatsDto> GetStatsHoy(DateTime hoy)
-    {
-        var pendientes = await _context.Citas.CountAsync(c => c.Estado == "Pendiente");
-        var confirmadas = await _context.Citas.CountAsync(c => c.Estado == "Confirmada");
-        var completadas = await _context.Citas.CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada") && c.Fecha.Date == hoy);
-        var totalHoy = await _context.Citas.CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo");
-        var recaudado = await _context.Citas
-            .Where(c => c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"))
-            .Join(_context.Servicios, c => c.ServicioId, s => s.Id, (c, s) => s.Precio)
-            .SumAsync(p => p);
-
-        return new DashboardStatsDto
-        {
-            CitasPendientes = pendientes,
-            CitasConfirmadas = confirmadas,
-            CitasCompletadas = completadas,
-            CitasHoy = totalHoy,
-            TotalRecaudadoHoy = recaudado
-        };
-    }
-
-    private async Task<DashboardStatsPersonalesDto> GetStatsBarbero(int barberoId, DateTime hoy)
-    {
-        var totalHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
-            && c.Fecha.Date == hoy && c.Estado != "Inactivo");
-        var completadasHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
-            && c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"));
-        var total = await _context.Citas.CountAsync(c => c.BarberoId == barberoId && c.Estado != "Inactivo");
-
-        return new DashboardStatsPersonalesDto
-        {
-            CitasHoy = totalHoy,
-            CitasCompletadasHoy = completadasHoy,
-            TotalCitas = total
-        };
-    }
-
-    private Task<List<BarberoResponseDto>> GetBarberos()
-    {
-        return _context.Barberos
-            .Where(b => b.Estado != "Inactivo")
-            .OrderBy(b => b.Nombre)
-            .Select(b => new BarberoResponseDto
-            {
-                Codigo = b.Codigo,
-                Nombre = b.Nombre,
-                Estado = b.Estado,
-                FechaCreacion = b.FechaCreacion
-            })
-            .ToListAsync();
-    }
-
-    private Task<List<ServicioResponseDto>> GetServicios()
-    {
-        return _context.Servicios
-            .Where(s => s.Estado != "Inactivo")
-            .OrderBy(s => s.Nombre)
-            .Select(s => new ServicioResponseDto
-            {
-                Codigo = s.Codigo,
-                Nombre = s.Nombre,
-                Precio = s.Precio,
-                Estado = s.Estado,
-                FechaCreacion = s.FechaCreacion
-            })
-            .ToListAsync();
-    }
-
-    private Task<List<ClienteResponseDto>> GetClientes()
-    {
-        return _context.Clientes
-            .Where(c => c.Estado != "Inactivo")
-            .OrderBy(c => c.Nombre)
-            .Select(c => new ClienteResponseDto
-            {
-                Codigo = c.Codigo,
-                Nombre = c.Nombre,
-                Telefono = c.Telefono,
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-    }
-
-    private Task<List<CitaResponseDto>> GetCitas()
-    {
-        return _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .ThenBy(c => c.Hora)
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-    }
-
-    private Task<List<CitaResponseDto>> GetCitasBarbero(int barberoId)
-    {
-        return _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .ThenBy(c => c.Hora)
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-    }
-
-    private Task<List<CierreCajaResponseDto>> GetCierresCaja()
-    {
-        return _context.CierreCaja
-            .OrderByDescending(cc => cc.Fecha)
-            .Select(cc => new CierreCajaResponseDto
-            {
-                Id = cc.Id,
-                Fecha = cc.Fecha,
-                TotalRecaudado = cc.TotalRecaudado,
-                TotalCitas = cc.TotalCitas,
-                Detalles = null,
-                FechaCreacion = cc.FechaCreacion
-            })
-            .ToListAsync();
     }
 }
