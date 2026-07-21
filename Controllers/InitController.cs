@@ -61,19 +61,19 @@ public class InitController : ControllerBase
                     cl.""Nombre"" as ""clienteNombre"", cl.""Telefono"" as ""clienteTelefono"",
                     b.""Nombre"" as ""barberoNombre"",
                     s.""Nombre"" as ""servicioNombre"", s.""Precio"" as ""servicioPrecio"",
-                    c2.""Fecha"" as ""fecha"", c2.""Hora""::text as ""hora"",
+                    c2.""Fecha"" as ""fecha"", to_char(c2.""Hora"", 'HH24:MI') as ""hora"",
                     c2.""Estado"" as ""estado"", c2.""FechaCreacion"" as ""fechaCreacion""
                 FROM ""Citas"" c2
                 JOIN ""Clientes"" cl ON c2.""ClienteId"" = cl.""Id""
                 JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
                 JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
-                WHERE c2.""Estado"" != 'Inactivo'
+                WHERE c2.""Estado"" IN ('Pendiente','Confirmada','Completada','Terminada')
                 ORDER BY c2.""Fecha"" DESC, c2.""Hora""
             ) c), '[]'::json)
             UNION ALL
             SELECT 'cierres', COALESCE((SELECT json_agg(row_to_json(cc)) FROM (
                 SELECT ""Id"" as ""id"", ""Fecha"" as ""fecha"", ""TotalRecaudado"" as ""totalRecaudado"",
-                    ""TotalCitas"" as ""totalCitas"", null as ""detalles"", ""FechaCreacion"" as ""fechaCreacion""
+                    ""TotalCitas"" as ""totalCitas"", CASE WHEN ""DetallesJson"" IS NOT NULL THEN ""DetallesJson""::json ELSE null END as ""detalles"", ""FechaCreacion"" as ""fechaCreacion""
                 FROM ""CierreCaja"" ORDER BY ""Fecha"" DESC
             ) cc), '[]'::json)
         ";
@@ -155,13 +155,13 @@ public class InitController : ControllerBase
                     cl.""Nombre"" as ""clienteNombre"", cl.""Telefono"" as ""clienteTelefono"",
                     b.""Nombre"" as ""barberoNombre"",
                     s.""Nombre"" as ""servicioNombre"", s.""Precio"" as ""servicioPrecio"",
-                    c2.""Fecha"" as ""fecha"", c2.""Hora""::text as ""hora"",
+                    c2.""Fecha"" as ""fecha"", to_char(c2.""Hora"", 'HH24:MI') as ""hora"",
                     c2.""Estado"" as ""estado"", c2.""FechaCreacion"" as ""fechaCreacion""
                 FROM ""Citas"" c2
                 JOIN ""Clientes"" cl ON c2.""ClienteId"" = cl.""Id""
                 JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
                 JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
-                WHERE c2.""BarberoId"" = @barberoId AND c2.""Estado"" != 'Inactivo'
+                WHERE c2.""BarberoId"" = @barberoId AND c2.""Estado"" IN ('Pendiente','Confirmada','Completada','Terminada')
                 ORDER BY c2.""Fecha"" DESC, c2.""Hora""
             ) c), '[]'::json)
         ";
