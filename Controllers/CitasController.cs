@@ -121,55 +121,47 @@ public class CitasController : ControllerBase
     [Authorize(Roles = "Encargado")]
     public async Task<ActionResult> Create([FromBody] CitaRequestDto dto)
     {
-        var clienteTask = _context.Clientes
+        var cliente = await _context.Clientes
             .FirstOrDefaultAsync(c => c.Codigo == dto.ClienteCodigo && c.Estado != "Inactivo");
-        var barberoTask = _context.Barberos
-            .FirstOrDefaultAsync(b => b.Codigo == dto.BarberoCodigo && b.Estado != "Inactivo");
-        var servicioTask = _context.Servicios
-            .FirstOrDefaultAsync(s => s.Codigo == dto.ServicioCodigo && s.Estado != "Inactivo");
-
-        await Task.WhenAll(clienteTask, barberoTask, servicioTask);
-
-        var cliente = clienteTask.Result;
         if (cliente == null)
             return BadRequest(new { mensaje = "Cliente no encontrado" });
 
-        var barbero = barberoTask.Result;
+        var barbero = await _context.Barberos
+            .FirstOrDefaultAsync(b => b.Codigo == dto.BarberoCodigo && b.Estado != "Inactivo");
         if (barbero == null)
             return BadRequest(new { mensaje = "Barbero no encontrado" });
 
-        var servicio = servicioTask.Result;
+        var servicio = await _context.Servicios
+            .FirstOrDefaultAsync(s => s.Codigo == dto.ServicioCodigo && s.Estado != "Inactivo");
         if (servicio == null)
             return BadRequest(new { mensaje = "Servicio no encontrado" });
 
         if (!TimeSpan.TryParse(dto.Hora, out var hora))
             return BadRequest(new { mensaje = "Formato de hora inválido (usar HH:mm)" });
 
-        var dobleReservaTask = _context.Citas
+        var dobleReserva = await _context.Citas
             .AnyAsync(c => c.BarberoId == barbero.Id
                 && c.Fecha.Date == dto.Fecha.Date
                 && c.Hora == hora
                 && c.Estado != "Cancelada"
                 && c.Estado != "Cerrada");
 
-        var codigoCitaTask = _codigoService.GenerarCodigoCita();
-        var codigoGeneradoTask = _codigoService.GenerarCodigoGenerado(dto.Fecha);
-
-        await Task.WhenAll(dobleReservaTask, codigoCitaTask, codigoGeneradoTask);
-
-        if (dobleReservaTask.Result)
+        if (dobleReserva)
             return BadRequest(new { mensaje = "El barbero ya tiene una cita en esa fecha y hora" });
+
+        var codigo = await _codigoService.GenerarCodigoCita();
+        var codigoGenerado = await _codigoService.GenerarCodigoGenerado(dto.Fecha);
 
         var cita = new Cita
         {
-            Codigo = codigoCitaTask.Result,
+            Codigo = codigo,
             ClienteId = cliente.Id,
             BarberoId = barbero.Id,
             ServicioId = servicio.Id,
             Fecha = dto.Fecha.Date,
             Hora = hora,
             Estado = "Pendiente",
-            CodigoGenerado = codigoGeneradoTask.Result,
+            CodigoGenerado = codigoGenerado,
             FechaCreacion = DateTime.UtcNow
         };
 

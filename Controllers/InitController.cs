@@ -31,23 +31,21 @@ public class InitController : ControllerBase
     {
         var hoy = DateTime.UtcNow.Date;
 
-        var statsTask = GetStatsHoy(hoy);
-        var barberosTask = GetBarberos();
-        var serviciosTask = GetServicios();
-        var clientesTask = GetClientes();
-        var citasTask = GetCitas();
-        var cierresTask = GetCierresCaja();
-
-        await Task.WhenAll(statsTask, barberosTask, serviciosTask, clientesTask, citasTask, cierresTask);
+        var stats = await GetStatsHoy(hoy);
+        var barberos = await GetBarberos();
+        var servicios = await GetServicios();
+        var clientes = await GetClientes();
+        var citas = await GetCitas();
+        var cierres = await GetCierresCaja();
 
         return Ok(new InitEncargadoDto
         {
-            Stats = statsTask.Result,
-            Barberos = barberosTask.Result,
-            Servicios = serviciosTask.Result,
-            Clientes = clientesTask.Result,
-            Citas = citasTask.Result,
-            CierresCaja = cierresTask.Result
+            Stats = stats,
+            Barberos = barberos,
+            Servicios = servicios,
+            Clientes = clientes,
+            Citas = citas,
+            CierresCaja = cierres
         });
     }
 
@@ -61,70 +59,51 @@ public class InitController : ControllerBase
 
         var hoy = DateTime.UtcNow.Date;
 
-        var statsTask = _context.Citas
-            .Where(c => c.BarberoId == barberoId)
-            .GroupBy(c => 1)
-            .Select(g => new DashboardStatsPersonalesDto
-            {
-                CitasHoy = g.Count(c => c.Fecha.Date == hoy && c.Estado != "Inactivo"),
-                CitasCompletadasHoy = g.Count(c => c.Fecha.Date == hoy
-                    && (c.Estado == "Completada" || c.Estado == "Terminada")),
-                TotalCitas = g.Count(c => c.Estado != "Inactivo")
-            })
-            .FirstOrDefaultAsync() ?? Task.FromResult(new DashboardStatsPersonalesDto());
-
-        var citasTask = _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .ThenBy(c => c.Hora)
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-
-        await Task.WhenAll(statsTask, citasTask);
+        var stats = await GetStatsBarbero(barberoId, hoy);
+        var citas = await GetCitasBarbero(barberoId);
 
         return Ok(new InitBarberoDto
         {
-            Stats = statsTask.Result,
-            Citas = citasTask.Result
+            Stats = stats,
+            Citas = citas
         });
     }
 
-    private Task<DashboardStatsDto> GetStatsHoy(DateTime hoy)
+    private async Task<DashboardStatsDto> GetStatsHoy(DateTime hoy)
     {
-        var pendientesTask = _context.Citas.CountAsync(c => c.Estado == "Pendiente");
-        var confirmadasTask = _context.Citas.CountAsync(c => c.Estado == "Confirmada");
-        var completadasTask = _context.Citas.CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada") && c.Fecha.Date == hoy);
-        var hoyTask = _context.Citas.CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo");
-        var recaudadoTask = _context.Citas
+        var pendientes = await _context.Citas.CountAsync(c => c.Estado == "Pendiente");
+        var confirmadas = await _context.Citas.CountAsync(c => c.Estado == "Confirmada");
+        var completadas = await _context.Citas.CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada") && c.Fecha.Date == hoy);
+        var totalHoy = await _context.Citas.CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo");
+        var recaudado = await _context.Citas
             .Where(c => c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"))
             .Join(_context.Servicios, c => c.ServicioId, s => s.Id, (c, s) => s.Precio)
             .SumAsync(p => p);
 
-        return Task.WhenAll(pendientesTask, confirmadasTask, completadasTask, hoyTask, recaudadoTask)
-            .ContinueWith(t => new DashboardStatsDto
-            {
-                CitasPendientes = pendientesTask.Result,
-                CitasConfirmadas = confirmadasTask.Result,
-                CitasCompletadas = completadasTask.Result,
-                CitasHoy = hoyTask.Result,
-                TotalRecaudadoHoy = recaudadoTask.Result
-            });
+        return new DashboardStatsDto
+        {
+            CitasPendientes = pendientes,
+            CitasConfirmadas = confirmadas,
+            CitasCompletadas = completadas,
+            CitasHoy = totalHoy,
+            TotalRecaudadoHoy = recaudado
+        };
+    }
+
+    private async Task<DashboardStatsPersonalesDto> GetStatsBarbero(int barberoId, DateTime hoy)
+    {
+        var totalHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
+            && c.Fecha.Date == hoy && c.Estado != "Inactivo");
+        var completadasHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
+            && c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"));
+        var total = await _context.Citas.CountAsync(c => c.BarberoId == barberoId && c.Estado != "Inactivo");
+
+        return new DashboardStatsPersonalesDto
+        {
+            CitasHoy = totalHoy,
+            CitasCompletadasHoy = completadasHoy,
+            TotalCitas = total
+        };
     }
 
     private Task<List<BarberoResponseDto>> GetBarberos()
@@ -181,6 +160,32 @@ public class InitController : ControllerBase
             .Include(c => c.Barbero)
             .Include(c => c.Servicio)
             .Where(c => c.Estado != "Inactivo")
+            .OrderByDescending(c => c.Fecha)
+            .ThenBy(c => c.Hora)
+            .Select(c => new CitaResponseDto
+            {
+                Codigo = c.Codigo,
+                CodigoGenerado = c.CodigoGenerado,
+                ClienteNombre = c.Cliente!.Nombre,
+                ClienteTelefono = c.Cliente!.Telefono,
+                BarberoNombre = c.Barbero!.Nombre,
+                ServicioNombre = c.Servicio!.Nombre,
+                ServicioPrecio = c.Servicio!.Precio,
+                Fecha = c.Fecha,
+                Hora = c.Hora.ToString(@"hh\:mm"),
+                Estado = c.Estado,
+                FechaCreacion = c.FechaCreacion
+            })
+            .ToListAsync();
+    }
+
+    private Task<List<CitaResponseDto>> GetCitasBarbero(int barberoId)
+    {
+        return _context.Citas
+            .Include(c => c.Cliente)
+            .Include(c => c.Barbero)
+            .Include(c => c.Servicio)
+            .Where(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
             .OrderByDescending(c => c.Fecha)
             .ThenBy(c => c.Hora)
             .Select(c => new CitaResponseDto
