@@ -25,22 +25,27 @@ public class DashboardController : ControllerBase
     {
         var hoy = DateTime.UtcNow.Date;
 
+        var pendientesTask = _context.Citas.CountAsync(c => c.Estado == "Pendiente");
+        var confirmadasTask = _context.Citas.CountAsync(c => c.Estado == "Confirmada");
+        var completadasTask = _context.Citas.CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada") && c.Fecha.Date == hoy);
+        var hoyTask = _context.Citas.CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo");
+        var recaudadoTask = _context.Citas
+            .Where(c => c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"))
+            .Join(_context.Servicios,
+                c => c.ServicioId,
+                s => s.Id,
+                (c, s) => s.Precio)
+            .SumAsync(p => p);
+
+        await Task.WhenAll(pendientesTask, confirmadasTask, completadasTask, hoyTask, recaudadoTask);
+
         var stats = new DashboardStatsDto
         {
-            CitasPendientes = await _context.Citas
-                .CountAsync(c => c.Estado == "Pendiente" && c.Estado != "Inactivo"),
-            CitasConfirmadas = await _context.Citas
-                .CountAsync(c => c.Estado == "Confirmada" && c.Estado != "Inactivo"),
-            CitasCompletadas = await _context.Citas
-                .CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada")
-                    && c.Fecha.Date == hoy),
-            CitasHoy = await _context.Citas
-                .CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo"),
-            TotalRecaudadoHoy = await _context.Citas
-                .Include(c => c.Servicio)
-                .Where(c => c.Fecha.Date == hoy
-                    && (c.Estado == "Completada" || c.Estado == "Terminada"))
-                .SumAsync(c => c.Servicio!.Precio)
+            CitasPendientes = pendientesTask.Result,
+            CitasConfirmadas = confirmadasTask.Result,
+            CitasCompletadas = completadasTask.Result,
+            CitasHoy = hoyTask.Result,
+            TotalRecaudadoHoy = recaudadoTask.Result
         };
 
         return Ok(stats);
@@ -56,18 +61,20 @@ public class DashboardController : ControllerBase
         if (barberoId == 0)
             return BadRequest(new { mensaje = "No se encontró el barbero asociado" });
 
+        var hoyTask = _context.Citas.CountAsync(c => c.BarberoId == barberoId
+                && c.Fecha.Date == hoy && c.Estado != "Inactivo");
+        var completadasTask = _context.Citas.CountAsync(c => c.BarberoId == barberoId
+                && c.Fecha.Date == hoy
+                && (c.Estado == "Completada" || c.Estado == "Terminada"));
+        var totalTask = _context.Citas.CountAsync(c => c.BarberoId == barberoId && c.Estado != "Inactivo");
+
+        await Task.WhenAll(hoyTask, completadasTask, totalTask);
+
         var stats = new DashboardStatsPersonalesDto
         {
-            CitasHoy = await _context.Citas
-                .CountAsync(c => c.BarberoId == barberoId
-                    && c.Fecha.Date == hoy
-                    && c.Estado != "Inactivo"),
-            CitasCompletadasHoy = await _context.Citas
-                .CountAsync(c => c.BarberoId == barberoId
-                    && c.Fecha.Date == hoy
-                    && (c.Estado == "Completada" || c.Estado == "Terminada")),
-            TotalCitas = await _context.Citas
-                .CountAsync(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
+            CitasHoy = hoyTask.Result,
+            CitasCompletadasHoy = completadasTask.Result,
+            TotalCitas = totalTask.Result
         };
 
         return Ok(stats);
