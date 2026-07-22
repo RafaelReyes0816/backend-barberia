@@ -18,7 +18,11 @@ builder.Configuration["ConnectionStrings:DefaultConnection"] = connectionString;
 
 // DbContext
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString, npgsql =>
+    {
+        npgsql.CommandTimeout(10);
+        npgsql.EnableRetryOnFailure(2, TimeSpan.FromSeconds(1), null);
+    }));
 
 // Services
 builder.Services.AddScoped<TokenService>();
