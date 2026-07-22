@@ -85,57 +85,55 @@ public class BarberosController : ControllerBase
                 return BadRequest(new { mensaje = "Ya existe un usuario con este email" });
         }
 
-        var barbero = new Barbero
+        var codigo = await _codigoService.GenerarCodigoBarbero();
+        var nombre = dto.Nombre;
+        var email = dto.Email?.ToLower();
+        var password = dto.Password;
+
+        _ = Task.Run(async () =>
         {
-            Codigo = await _codigoService.GenerarCodigoBarbero(),
-            Nombre = dto.Nombre,
-            Estado = "Activo",
-            FechaCreacion = DateTime.UtcNow
-        };
-
-        _context.Barberos.Add(barbero);
-        await _context.SaveChangesAsync();
-
-        var barberoId = barbero.Id;
-        var barberoNombre = barbero.Nombre;
-        var barberoEmail = dto.Email?.ToLower();
-        var barberoPassword = dto.Password;
-
-        if (!string.IsNullOrEmpty(barberoEmail) && !string.IsNullOrEmpty(barberoPassword))
-        {
-            _ = Task.Run(async () =>
+            try
             {
-                try
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var barbero = new Barbero
                 {
-                    using var scope = HttpContext.RequestServices.CreateScope();
-                    var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    var usuario = new Usuario
+                    Codigo = codigo,
+                    Nombre = nombre,
+                    Estado = "Activo",
+                    FechaCreacion = DateTime.UtcNow
+                };
+                ctx.Barberos.Add(barbero);
+                await ctx.SaveChangesAsync();
+
+                if (!string.IsNullOrEmpty(email) && !string.IsNullOrEmpty(password))
+                {
+                    ctx.Usuarios.Add(new Usuario
                     {
-                        Nombre = barberoNombre,
-                        Email = barberoEmail,
-                        PasswordHash = PasswordService.HashPassword(barberoPassword),
+                        Nombre = nombre,
+                        Email = email,
+                        PasswordHash = PasswordService.HashPassword(password),
                         Rol = "Barbero",
-                        BarberoId = barberoId,
+                        BarberoId = barbero.Id,
                         Estado = "Activo",
                         FechaCreacion = DateTime.UtcNow
-                    };
-                    ctx.Usuarios.Add(usuario);
+                    });
                     await ctx.SaveChangesAsync();
                 }
-                catch { }
-            });
-        }
+            }
+            catch { }
+        });
 
-        return CreatedAtAction(nameof(GetByCodigo), new { codigo = barbero.Codigo }, new
+        return Accepted(new
         {
             mensaje = "Barbero creado exitosamente",
             datos = new BarberoResponseDto
             {
-                Codigo = barbero.Codigo,
-                Nombre = barbero.Nombre,
-                Email = dto.Email?.ToLower(),
-                Estado = barbero.Estado,
-                FechaCreacion = barbero.FechaCreacion
+                Codigo = codigo,
+                Nombre = nombre,
+                Email = email,
+                Estado = "Activo",
+                FechaCreacion = DateTime.UtcNow
             }
         });
     }
