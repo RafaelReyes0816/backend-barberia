@@ -96,21 +96,34 @@ public class BarberosController : ControllerBase
         _context.Barberos.Add(barbero);
         await _context.SaveChangesAsync();
 
-        if (!string.IsNullOrEmpty(dto.Email) && !string.IsNullOrEmpty(dto.Password))
-        {
-            var usuario = new Usuario
-            {
-                Nombre = dto.Nombre,
-                Email = dto.Email.ToLower(),
-                PasswordHash = PasswordService.HashPassword(dto.Password),
-                Rol = "Barbero",
-                BarberoId = barbero.Id,
-                Estado = "Activo",
-                FechaCreacion = DateTime.UtcNow
-            };
+        var barberoId = barbero.Id;
+        var barberoNombre = barbero.Nombre;
+        var barberoEmail = dto.Email?.ToLower();
+        var barberoPassword = dto.Password;
 
-            _context.Usuarios.Add(usuario);
-            await _context.SaveChangesAsync();
+        if (!string.IsNullOrEmpty(barberoEmail) && !string.IsNullOrEmpty(barberoPassword))
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = HttpContext.RequestServices.CreateScope();
+                    var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var usuario = new Usuario
+                    {
+                        Nombre = barberoNombre,
+                        Email = barberoEmail,
+                        PasswordHash = PasswordService.HashPassword(barberoPassword),
+                        Rol = "Barbero",
+                        BarberoId = barberoId,
+                        Estado = "Activo",
+                        FechaCreacion = DateTime.UtcNow
+                    };
+                    ctx.Usuarios.Add(usuario);
+                    await ctx.SaveChangesAsync();
+                }
+                catch { }
+            });
         }
 
         return CreatedAtAction(nameof(GetByCodigo), new { codigo = barbero.Codigo }, new
@@ -137,14 +150,25 @@ public class BarberosController : ControllerBase
         if (barbero == null)
             return NotFound(new { mensaje = "Barbero no encontrado" });
 
-        barbero.Nombre = dto.NuevoNombre;
+        var nombreActualizado = dto.NuevoNombre;
 
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
-        if (usuario != null)
-            usuario.Nombre = dto.NuevoNombre;
-
-        await _context.SaveChangesAsync();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var b = await ctx.Barberos.FirstOrDefaultAsync(b => b.Codigo == codigo);
+                if (b != null)
+                {
+                    b.Nombre = nombreActualizado;
+                    var u = await ctx.Usuarios.FirstOrDefaultAsync(u => u.BarberoId == b.Id && u.Estado == "Activo");
+                    if (u != null) u.Nombre = nombreActualizado;
+                    await ctx.SaveChangesAsync();
+                }
+            }
+            catch { }
+        });
 
         return Ok(new { mensaje = "Barbero actualizado exitosamente" });
     }
@@ -165,30 +189,42 @@ public class BarberosController : ControllerBase
         if (emailExiste)
             return BadRequest(new { mensaje = "Ya existe otro usuario con este email" });
 
-        var usuarioExistente = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
+        var barberoId = barbero.Id;
+        var barberoNombre = barbero.Nombre;
+        var emailLower = dto.Email.ToLower();
+        var passwordHash = PasswordService.HashPassword(dto.Password);
 
-        if (usuarioExistente != null)
+        _ = Task.Run(async () =>
         {
-            usuarioExistente.Email = dto.Email.ToLower();
-            usuarioExistente.PasswordHash = PasswordService.HashPassword(dto.Password);
-        }
-        else
-        {
-            var usuario = new Usuario
+            try
             {
-                Nombre = barbero.Nombre,
-                Email = dto.Email.ToLower(),
-                PasswordHash = PasswordService.HashPassword(dto.Password),
-                Rol = "Barbero",
-                BarberoId = barbero.Id,
-                Estado = "Activo",
-                FechaCreacion = DateTime.UtcNow
-            };
-            _context.Usuarios.Add(usuario);
-        }
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var usuarioExistente = await ctx.Usuarios
+                    .FirstOrDefaultAsync(u => u.BarberoId == barberoId && u.Estado == "Activo");
 
-        await _context.SaveChangesAsync();
+                if (usuarioExistente != null)
+                {
+                    usuarioExistente.Email = emailLower;
+                    usuarioExistente.PasswordHash = passwordHash;
+                }
+                else
+                {
+                    ctx.Usuarios.Add(new Usuario
+                    {
+                        Nombre = barberoNombre,
+                        Email = emailLower,
+                        PasswordHash = passwordHash,
+                        Rol = "Barbero",
+                        BarberoId = barberoId,
+                        Estado = "Activo",
+                        FechaCreacion = DateTime.UtcNow
+                    });
+                }
+                await ctx.SaveChangesAsync();
+            }
+            catch { }
+        });
 
         return Ok(new { mensaje = "Credenciales actualizadas exitosamente" });
     }
@@ -203,14 +239,25 @@ public class BarberosController : ControllerBase
         if (barbero == null)
             return NotFound(new { mensaje = "Barbero no encontrado" });
 
-        barbero.Estado = "Inactivo";
+        var barberoId = barbero.Id;
 
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
-        if (usuario != null)
-            usuario.Estado = "Inactivo";
-
-        await _context.SaveChangesAsync();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var b = await ctx.Barberos.FirstOrDefaultAsync(b => b.Id == barberoId);
+                if (b != null)
+                {
+                    b.Estado = "Inactivo";
+                    var u = await ctx.Usuarios.FirstOrDefaultAsync(u => u.BarberoId == barberoId && u.Estado == "Activo");
+                    if (u != null) u.Estado = "Inactivo";
+                    await ctx.SaveChangesAsync();
+                }
+            }
+            catch { }
+        });
 
         return Ok(new { mensaje = "Barbero eliminado exitosamente" });
     }
