@@ -88,7 +88,7 @@ public class BarberosController : ControllerBase
         var codigo = await _codigoService.GenerarCodigoBarbero();
         var nombre = dto.Nombre;
         var email = dto.Email?.ToLower();
-        var password = dto.Password;
+        var passwordHash = !string.IsNullOrEmpty(dto.Password) ? PasswordService.HashPassword(dto.Password) : null;
 
         _ = Task.Run(async () =>
         {
@@ -106,13 +106,13 @@ public class BarberosController : ControllerBase
                 ctx.Barberos.Add(barbero);
                 await ctx.SaveChangesAsync();
 
-                if (!string.IsNullOrEmpty(email) && !string.IsNullOrEmpty(password))
+                if (!string.IsNullOrEmpty(email) && !string.IsNullOrEmpty(passwordHash))
                 {
                     ctx.Usuarios.Add(new Usuario
                     {
                         Nombre = nombre,
                         Email = email,
-                        PasswordHash = PasswordService.HashPassword(password),
+                        PasswordHash = passwordHash,
                         Rol = "Barbero",
                         BarberoId = barbero.Id,
                         Estado = "Activo",
@@ -121,7 +121,10 @@ public class BarberosController : ControllerBase
                     await ctx.SaveChangesAsync();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BARBERO-FIRE-FORGET] {ex.Message}");
+            }
         });
 
         return Accepted(new
