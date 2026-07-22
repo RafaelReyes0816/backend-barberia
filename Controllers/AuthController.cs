@@ -105,21 +105,12 @@ public class AuthController : ControllerBase
         var usuario = new Usuario { Id = userId, Nombre = nombre, Email = email, Rol = rol, BarberoId = barberoId, Estado = estado };
         var token = _tokenService.GenerateAccessToken(usuario);
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await using var c = new NpgsqlConnection(_connectionString);
-                await c.OpenAsync();
-                await using var u = new NpgsqlCommand(
-                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", c);
-                u.Parameters.AddWithValue("@rt", refreshToken);
-                u.Parameters.AddWithValue("@rte", refreshTokenExpiry);
-                u.Parameters.AddWithValue("@id", userId);
-                await u.ExecuteNonQueryAsync();
-            }
-            catch { }
-        });
+        await using var updateCmd = new NpgsqlCommand(
+            "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
+        updateCmd.Parameters.AddWithValue("@rt", refreshToken);
+        updateCmd.Parameters.AddWithValue("@rte", refreshTokenExpiry);
+        updateCmd.Parameters.AddWithValue("@id", userId);
+        await updateCmd.ExecuteNonQueryAsync();
 
         return Ok(new AuthResponseDto
         {
@@ -178,21 +169,12 @@ public class AuthController : ControllerBase
         var usuario = new Usuario { Id = userId, Nombre = nombre, Email = email, Rol = rol, BarberoId = barberoId, Estado = estado };
         var token = _tokenService.GenerateAccessToken(usuario);
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await using var c = new NpgsqlConnection(_connectionString);
-                await c.OpenAsync();
-                await using var u = new NpgsqlCommand(
-                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", c);
-                u.Parameters.AddWithValue("@rt", newRefreshToken);
-                u.Parameters.AddWithValue("@rte", newRefreshTokenExpiry);
-                u.Parameters.AddWithValue("@id", userId);
-                await u.ExecuteNonQueryAsync();
-            }
-            catch { }
-        });
+        await using var updateCmd = new NpgsqlCommand(
+            "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
+        updateCmd.Parameters.AddWithValue("@rt", newRefreshToken);
+        updateCmd.Parameters.AddWithValue("@rte", newRefreshTokenExpiry);
+        updateCmd.Parameters.AddWithValue("@id", userId);
+        await updateCmd.ExecuteNonQueryAsync();
 
         return Ok(new AuthResponseDto
         {
