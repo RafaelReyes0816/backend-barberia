@@ -137,11 +137,24 @@ public class AuthController : ControllerBase
         var newRefreshToken = _tokenService.GenerateRefreshToken();
         var newRefreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
 
-        usuario.RefreshToken = newRefreshToken;
-        usuario.RefreshTokenExpiry = newRefreshTokenExpiry;
-        await _context.SaveChangesAsync();
-
         var token = _tokenService.GenerateAccessToken(usuario);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var user = await ctx.Usuarios.FindAsync(usuario.Id);
+                if (user != null)
+                {
+                    user.RefreshToken = newRefreshToken;
+                    user.RefreshTokenExpiry = newRefreshTokenExpiry;
+                    await ctx.SaveChangesAsync();
+                }
+            }
+            catch { }
+        });
 
         return Ok(new AuthResponseDto
         {
