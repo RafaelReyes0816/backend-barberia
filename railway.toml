@@ -3,7 +3,7 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "dotnet BarberPro.dll"
-healthcheckPath = "/"
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
