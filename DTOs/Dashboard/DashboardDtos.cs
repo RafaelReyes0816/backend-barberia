@@ -13,7 +13,6 @@ public class DashboardStatsPersonalesDto
 {
     public int CitasHoy { get; set; }
     public int CitasCompletadasHoy { get; set; }
-    public int TotalCitas { get; set; }
 }
 
 public class BuscarCitaDto

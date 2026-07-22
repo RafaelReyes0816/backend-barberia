@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using BarberPro.Data;
 using BarberPro.Dominio;
 using BarberPro.DTOs.CierreCaja;
@@ -14,10 +15,12 @@ namespace BarberPro.Controllers;
 public class CierreCajaController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly string _connectionString;
 
-    public CierreCajaController(AppDbContext context)
+    public CierreCajaController(AppDbContext context, IConfiguration configuration)
     {
         _context = context;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
     }
 
     [HttpPost]
@@ -84,53 +87,67 @@ public class CierreCajaController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<CierreCajaResponseDto>>> GetAll([FromQuery] int? mes, [FromQuery] int? anio)
     {
-        var query = _context.CierreCaja.AsQueryable();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        var sql = @"SELECT ""Id"", ""Fecha"", ""TotalRecaudado"", ""TotalCitas"", ""DetallesJson"", ""FechaCreacion""
+                    FROM ""CierreCaja""";
 
         if (mes.HasValue && anio.HasValue)
+            sql += @" WHERE ""Fecha""::date >= @desde AND ""Fecha""::date < @hasta";
+
+        sql += @" ORDER BY ""Fecha"" DESC LIMIT 50";
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        if (mes.HasValue && anio.HasValue)
         {
-            query = query.Where(c => c.Fecha.Month == mes.Value && c.Fecha.Year == anio.Value);
+            var desde = new DateTime(anio.Value, mes.Value, 1);
+            var hasta = desde.AddMonths(1);
+            cmd.Parameters.AddWithValue("@desde", desde);
+            cmd.Parameters.AddWithValue("@hasta", hasta);
         }
 
-        var cierresRaw = await query
-            .OrderByDescending(c => c.Fecha)
-            .ToListAsync();
-
-        var cierres = cierresRaw.Select(c => new CierreCajaResponseDto
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var cierres = new List<CierreCajaResponseDto>();
+        while (await reader.ReadAsync())
         {
-            Id = c.Id,
-            Fecha = c.Fecha,
-            TotalRecaudado = c.TotalRecaudado,
-            TotalCitas = c.TotalCitas,
-            Detalles = c.DetallesJson != null
-                ? JsonSerializer.Deserialize<List<DetalleServicioDto>>(c.DetallesJson)
-                : null,
-            FechaCreacion = c.FechaCreacion
-        }).ToList();
-
+            cierres.Add(new CierreCajaResponseDto
+            {
+                Id = reader.GetInt32(0),
+                Fecha = reader.GetDateTime(1),
+                TotalRecaudado = reader.GetDecimal(2),
+                TotalCitas = reader.GetInt32(3),
+                Detalles = reader.IsDBNull(4) ? null
+                    : JsonSerializer.Deserialize<List<DetalleServicioDto>>(reader.GetString(4)),
+                FechaCreacion = reader.GetDateTime(5)
+            });
+        }
         return Ok(cierres);
     }
 
     [HttpGet("{id}")]
     public async Task<ActionResult<CierreCajaResponseDto>> GetById(int id)
     {
-        var cierreRaw = await _context.CierreCaja
-            .FirstOrDefaultAsync(c => c.Id == id);
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT ""Id"", ""Fecha"", ""TotalRecaudado"", ""TotalCitas"", ""DetallesJson"", ""FechaCreacion""
+            FROM ""CierreCaja"" WHERE ""Id"" = @id", conn);
+        cmd.Parameters.AddWithValue("@id", id);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
-        if (cierreRaw == null)
+        if (!await reader.ReadAsync())
             return NotFound(new { mensaje = "Cierre de caja no encontrado" });
 
-        var cierre = new CierreCajaResponseDto
+        return Ok(new CierreCajaResponseDto
         {
-            Id = cierreRaw.Id,
-            Fecha = cierreRaw.Fecha,
-            TotalRecaudado = cierreRaw.TotalRecaudado,
-            TotalCitas = cierreRaw.TotalCitas,
-            Detalles = cierreRaw.DetallesJson != null
-                ? JsonSerializer.Deserialize<List<DetalleServicioDto>>(cierreRaw.DetallesJson)
-                : null,
-            FechaCreacion = cierreRaw.FechaCreacion
-        };
-
-        return Ok(cierre);
+            Id = reader.GetInt32(0),
+            Fecha = reader.GetDateTime(1),
+            TotalRecaudado = reader.GetDecimal(2),
+            TotalCitas = reader.GetInt32(3),
+            Detalles = reader.IsDBNull(4) ? null
+                : JsonSerializer.Deserialize<List<DetalleServicioDto>>(reader.GetString(4)),
+            FechaCreacion = reader.GetDateTime(5)
+        });
     }
 }

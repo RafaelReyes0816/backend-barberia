@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using BarberPro.Data;
 using BarberPro.Dominio;
 using BarberPro.DTOs.Citas;
@@ -16,40 +17,62 @@ public class CitasController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly CodigoService _codigoService;
+    private readonly string _connectionString;
 
-    public CitasController(AppDbContext context, CodigoService codigoService)
+    public CitasController(AppDbContext context, CodigoService codigoService, IConfiguration configuration)
     {
         _context = context;
         _codigoService = codigoService;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
+    }
+
+    private async Task<List<CitaResponseDto>> FetchCitas(string where, params NpgsqlParameter[] parameters)
+    {
+        var sql = $@"
+            SELECT c.""Codigo"", c.""CodigoGenerado"",
+                cl.""Nombre"", cl.""Telefono"",
+                b.""Nombre"",
+                s.""Nombre"", s.""Precio"",
+                c.""Fecha"", to_char(c.""Hora"", 'HH24:MI'),
+                c.""Estado"", c.""FechaCreacion""
+            FROM ""Citas"" c
+            JOIN ""Clientes"" cl ON c.""ClienteId"" = cl.""Id""
+            JOIN ""Barberos"" b ON c.""BarberoId"" = b.""Id""
+            JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id""
+            WHERE {where}
+            ORDER BY c.""Fecha"" DESC, c.""Hora""";
+
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        foreach (var p in parameters) cmd.Parameters.Add(p);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var citas = new List<CitaResponseDto>();
+        while (await reader.ReadAsync())
+        {
+            citas.Add(new CitaResponseDto
+            {
+                Codigo = reader.GetString(0),
+                CodigoGenerado = reader.GetString(1),
+                ClienteNombre = reader.GetString(2),
+                ClienteTelefono = reader.GetString(3),
+                BarberoNombre = reader.GetString(4),
+                ServicioNombre = reader.GetString(5),
+                ServicioPrecio = reader.GetDecimal(6),
+                Fecha = reader.GetDateTime(7),
+                Hora = reader.GetString(8),
+                Estado = reader.GetString(9),
+                FechaCreacion = reader.GetDateTime(10)
+            });
+        }
+        return citas;
     }
 
     [HttpGet]
     public async Task<ActionResult<IEnumerable<CitaResponseDto>>> GetAll()
     {
-        var citas = await _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .ThenBy(c => c.Hora)
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-
-        return Ok(citas);
+        return Ok(await FetchCitas("c.\"Estado\" != 'Inactivo'"));
     }
 
     [HttpGet("mis-citas")]
@@ -57,64 +80,25 @@ public class CitasController : ControllerBase
     public async Task<ActionResult<IEnumerable<CitaResponseDto>>> GetMisCitas()
     {
         var barberoId = int.Parse(User.FindFirstValue("BarberoId") ?? "0");
-
         if (barberoId == 0)
             return BadRequest(new { mensaje = "No se encontró el barbero asociado" });
 
-        var citas = await _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .ThenBy(c => c.Hora)
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .ToListAsync();
-
-        return Ok(citas);
+        return Ok(await FetchCitas(
+            "c.\"BarberoId\" = @barberoId AND c.\"Estado\" != 'Inactivo'",
+            new NpgsqlParameter("@barberoId", barberoId)));
     }
 
     [HttpGet("{codigo}")]
     public async Task<ActionResult<CitaResponseDto>> GetByCodigo(string codigo)
     {
-        var cita = await _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.Codigo == codigo && c.Estado != "Inactivo")
-            .Select(c => new CitaResponseDto
-            {
-                Codigo = c.Codigo,
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado,
-                FechaCreacion = c.FechaCreacion
-            })
-            .FirstOrDefaultAsync();
+        var citas = await FetchCitas(
+            "c.\"Codigo\" = @codigo AND c.\"Estado\" != 'Inactivo'",
+            new NpgsqlParameter("@codigo", codigo));
 
-        if (cita == null)
+        if (citas.Count == 0)
             return NotFound(new { mensaje = "Cita no encontrada" });
 
-        return Ok(cita);
+        return Ok(citas[0]);
     }
 
     [HttpPost]

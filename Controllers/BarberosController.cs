@@ -28,46 +28,57 @@ public class BarberosController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<BarberoResponseDto>>> GetAll()
     {
-        var barberos = await _context.Barberos
-            .Where(b => b.Estado != "Inactivo")
-            .Select(b => new BarberoResponseDto
-            {
-                Codigo = b.Codigo,
-                Nombre = b.Nombre,
-                Email = _context.Usuarios
-                    .Where(u => u.BarberoId == b.Id && u.Estado == "Activo")
-                    .Select(u => u.Email)
-                    .FirstOrDefault(),
-                Estado = b.Estado,
-                FechaCreacion = b.FechaCreacion
-            })
-            .ToListAsync();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT b.""Codigo"", b.""Nombre"", b.""Estado"", b.""FechaCreacion"",
+                   u.""Email""
+            FROM ""Barberos"" b
+            LEFT JOIN ""Usuarios"" u ON u.""BarberoId"" = b.""Id"" AND u.""Estado"" = 'Activo'
+            WHERE b.""Estado"" != 'Inactivo'
+            ORDER BY b.""Nombre""", conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
+        var barberos = new List<BarberoResponseDto>();
+        while (await reader.ReadAsync())
+        {
+            barberos.Add(new BarberoResponseDto
+            {
+                Codigo = reader.GetString(0),
+                Nombre = reader.GetString(1),
+                Email = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Estado = reader.GetString(2),
+                FechaCreacion = reader.GetDateTime(3)
+            });
+        }
         return Ok(barberos);
     }
 
     [HttpGet("{codigo}")]
     public async Task<ActionResult<BarberoResponseDto>> GetByCodigo(string codigo)
     {
-        var barbero = await _context.Barberos
-            .Where(b => b.Codigo == codigo && b.Estado != "Inactivo")
-            .Select(b => new BarberoResponseDto
-            {
-                Codigo = b.Codigo,
-                Nombre = b.Nombre,
-                Email = _context.Usuarios
-                    .Where(u => u.BarberoId == b.Id && u.Estado == "Activo")
-                    .Select(u => u.Email)
-                    .FirstOrDefault(),
-                Estado = b.Estado,
-                FechaCreacion = b.FechaCreacion
-            })
-            .FirstOrDefaultAsync();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT b.""Codigo"", b.""Nombre"", b.""Estado"", b.""FechaCreacion"",
+                   u.""Email""
+            FROM ""Barberos"" b
+            LEFT JOIN ""Usuarios"" u ON u.""BarberoId"" = b.""Id"" AND u.""Estado"" = 'Activo'
+            WHERE b.""Codigo"" = @codigo AND b.""Estado"" != 'Inactivo'", conn);
+        cmd.Parameters.AddWithValue("@codigo", codigo);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
-        if (barbero == null)
+        if (!await reader.ReadAsync())
             return NotFound(new { mensaje = "Barbero no encontrado" });
 
-        return Ok(barbero);
+        return Ok(new BarberoResponseDto
+        {
+            Codigo = reader.GetString(0),
+            Nombre = reader.GetString(1),
+            Email = reader.IsDBNull(4) ? null : reader.GetString(4),
+            Estado = reader.GetString(2),
+            FechaCreacion = reader.GetDateTime(3)
+        });
     }
 
     [HttpPost]

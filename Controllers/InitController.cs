@@ -36,6 +36,7 @@ public class InitController : ControllerBase
     public async Task<ActionResult<InitEncargadoDto>> GetEncargado()
     {
         var hoy = DateTime.UtcNow.Date;
+        var desde = hoy.AddDays(-30);
 
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
@@ -43,11 +44,13 @@ public class InitController : ControllerBase
         var sql = @"
             SELECT 'stats', row_to_json(t) FROM (
                 SELECT
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
-                    COALESCE((SELECT SUM(s.""Precio"") FROM ""Citas"" c JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id"" WHERE c.""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""
+                    COUNT(*) FILTER (WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
+                    COUNT(*) FILTER (WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
+                    COUNT(*) FILTER (WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
+                    COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                    COALESCE(SUM(s.""Precio"") FILTER (WHERE ""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""
+                FROM ""Citas"" c
+                JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id""
             ) t
             UNION ALL
             SELECT 'barberos', COALESCE((SELECT json_agg(row_to_json(b)) FROM (SELECT ""Codigo"" as ""codigo"", ""Nombre"" as ""nombre"", ""Estado"" as ""estado"", ""FechaCreacion"" as ""fechaCreacion"" FROM ""Barberos"" WHERE ""Estado"" != 'Inactivo' ORDER BY ""Nombre"") b), '[]'::json)
@@ -68,18 +71,21 @@ public class InitController : ControllerBase
                 JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
                 JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
                 WHERE c2.""Estado"" IN ('Pendiente','Confirmada','Completada','Terminada')
+                  AND c2.""Fecha""::date >= @desde
                 ORDER BY c2.""Fecha"" DESC, c2.""Hora""
+                LIMIT 100
             ) c), '[]'::json)
             UNION ALL
             SELECT 'cierres', COALESCE((SELECT json_agg(row_to_json(cc)) FROM (
                 SELECT ""Id"" as ""id"", ""Fecha"" as ""fecha"", ""TotalRecaudado"" as ""totalRecaudado"",
                     ""TotalCitas"" as ""totalCitas"", CASE WHEN ""DetallesJson"" IS NOT NULL THEN ""DetallesJson""::json ELSE null END as ""detalles"", ""FechaCreacion"" as ""fechaCreacion""
-                FROM ""CierreCaja"" ORDER BY ""Fecha"" DESC
+                FROM ""CierreCaja"" ORDER BY ""Fecha"" DESC LIMIT 50
             ) cc), '[]'::json)
         ";
 
         await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@hoy", hoy);
+        cmd.Parameters.AddWithValue("@desde", desde);
 
         await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -138,6 +144,7 @@ public class InitController : ControllerBase
             return BadRequest(new { mensaje = "No se encontró el barbero asociado" });
 
         var hoy = DateTime.UtcNow.Date;
+        var desde = hoy.AddDays(-30);
 
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
@@ -145,9 +152,8 @@ public class InitController : ControllerBase
         var sql = @"
             SELECT 'stats', row_to_json(t) FROM (
                 SELECT
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Fecha""::date = @hoy AND ""Estado"" IN ('Completada','Terminada')) AS ""citasCompletadasHoy"",
-                    (SELECT COUNT(*) FROM ""Citas"" WHERE ""BarberoId"" = @barberoId AND ""Estado"" != 'Inactivo') AS ""totalCitas""
+                    COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                    COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" IN ('Completada','Terminada')) AS ""citasCompletadasHoy""
             ) t
             UNION ALL
             SELECT 'citas', COALESCE((SELECT json_agg(row_to_json(c)) FROM (
@@ -161,14 +167,18 @@ public class InitController : ControllerBase
                 JOIN ""Clientes"" cl ON c2.""ClienteId"" = cl.""Id""
                 JOIN ""Barberos"" b ON c2.""BarberoId"" = b.""Id""
                 JOIN ""Servicios"" s ON c2.""ServicioId"" = s.""Id""
-                WHERE c2.""BarberoId"" = @barberoId AND c2.""Estado"" IN ('Pendiente','Confirmada','Completada','Terminada')
+                WHERE c2.""BarberoId"" = @barberoId
+                  AND c2.""Estado"" IN ('Pendiente','Confirmada','Completada','Terminada')
+                  AND c2.""Fecha""::date >= @desde
                 ORDER BY c2.""Fecha"" DESC, c2.""Hora""
+                LIMIT 100
             ) c), '[]'::json)
         ";
 
         await using var cmd = new NpgsqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@barberoId", barberoId);
         cmd.Parameters.AddWithValue("@hoy", hoy);
+        cmd.Parameters.AddWithValue("@desde", desde);
 
         await using var reader = await cmd.ExecuteReaderAsync();
 

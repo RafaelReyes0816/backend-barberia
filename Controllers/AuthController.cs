@@ -70,40 +70,56 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<ActionResult> Login([FromBody] LoginDto dto)
     {
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == dto.Email.ToLower() && u.Estado == "Activo");
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
 
-        if (usuario == null || !PasswordService.VerifyPassword(dto.Password, usuario.PasswordHash))
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT u.""Id"", u.""Nombre"", u.""Email"", u.""Rol"", u.""BarberoId"",
+                   u.""Estado"", u.""PasswordHash"",
+                   b.""Nombre"" as ""BarberoNombre""
+            FROM ""Usuarios"" u
+            LEFT JOIN ""Barberos"" b ON u.""BarberoId"" = b.""Id""
+            WHERE u.""Email"" = @email AND u.""Estado"" = 'Activo'
+            LIMIT 1", conn);
+        cmd.Parameters.AddWithValue("@email", dto.Email.ToLower());
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
             return Unauthorized(new { mensaje = "Email o contraseña incorrectos" });
+
+        var passwordHash = reader.GetString(6);
+        if (!PasswordService.VerifyPassword(dto.Password, passwordHash))
+            return Unauthorized(new { mensaje = "Email o contraseña incorrectos" });
+
+        var userId = reader.GetInt32(0);
+        var nombre = reader.GetString(1);
+        var email = reader.GetString(2);
+        var rol = reader.GetString(3);
+        var barberoId = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4);
+        var estado = reader.GetString(5);
+        var barberoNombre = reader.IsDBNull(7) ? null : reader.GetString(7);
 
         var refreshToken = _tokenService.GenerateRefreshToken();
         var refreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
 
+        var usuario = new Usuario { Id = userId, Nombre = nombre, Email = email, Rol = rol, BarberoId = barberoId, Estado = estado };
         var token = _tokenService.GenerateAccessToken(usuario);
 
-        var userId = usuario.Id;
         _ = Task.Run(async () =>
         {
             try
             {
-                await using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
-                await using var cmd = new NpgsqlCommand(
-                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
-                cmd.Parameters.AddWithValue("@rt", refreshToken);
-                cmd.Parameters.AddWithValue("@rte", refreshTokenExpiry);
-                cmd.Parameters.AddWithValue("@id", userId);
-                await cmd.ExecuteNonQueryAsync();
+                await using var c = new NpgsqlConnection(_connectionString);
+                await c.OpenAsync();
+                await using var u = new NpgsqlCommand(
+                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", c);
+                u.Parameters.AddWithValue("@rt", refreshToken);
+                u.Parameters.AddWithValue("@rte", refreshTokenExpiry);
+                u.Parameters.AddWithValue("@id", userId);
+                await u.ExecuteNonQueryAsync();
             }
             catch { }
         });
-
-        string? barberoNombre = null;
-        if (usuario.BarberoId.HasValue)
-        {
-            var barbero = await _context.Barberos.FindAsync(usuario.BarberoId.Value);
-            barberoNombre = barbero?.Nombre;
-        }
 
         return Ok(new AuthResponseDto
         {
@@ -112,13 +128,13 @@ public class AuthController : ControllerBase
             ExpiresAt = _tokenService.GetAccessTokenExpiration(),
             Usuario = new UsuarioResponseDto
             {
-                Id = usuario.Id,
-                Nombre = usuario.Nombre,
-                Email = usuario.Email,
-                Rol = usuario.Rol,
-                BarberoId = usuario.BarberoId,
+                Id = userId,
+                Nombre = nombre,
+                Email = email,
+                Rol = rol,
+                BarberoId = barberoId,
                 BarberoNombre = barberoNombre,
-                Estado = usuario.Estado
+                Estado = estado
             }
         });
     }
@@ -129,30 +145,51 @@ public class AuthController : ControllerBase
         if (string.IsNullOrEmpty(dto.RefreshToken))
             return BadRequest(new { mensaje = "Refresh token requerido" });
 
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Estado == "Activo" && u.RefreshToken == dto.RefreshToken);
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
 
-        if (usuario == null || !_tokenService.ValidateRefreshToken(usuario, dto.RefreshToken))
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT ""Id"", ""Nombre"", ""Email"", ""Rol"", ""BarberoId"", ""Estado"",
+                   ""RefreshToken"", ""RefreshTokenExpiry""
+            FROM ""Usuarios""
+            WHERE ""Estado"" = 'Activo' AND ""RefreshToken"" = @rt
+            LIMIT 1", conn);
+        cmd.Parameters.AddWithValue("@rt", dto.RefreshToken);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return Unauthorized(new { mensaje = "Refresh token inválido o expirado" });
+
+        var userId = reader.GetInt32(0);
+        var nombre = reader.GetString(1);
+        var email = reader.GetString(2);
+        var rol = reader.GetString(3);
+        var barberoId = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4);
+        var estado = reader.GetString(5);
+        var storedRt = reader.GetString(6);
+        var rtExpiry = reader.IsDBNull(7) ? (DateTime?)null : reader.GetDateTime(7);
+
+        if (storedRt != dto.RefreshToken || !rtExpiry.HasValue || rtExpiry.Value <= DateTime.UtcNow)
             return Unauthorized(new { mensaje = "Refresh token inválido o expirado" });
 
         var newRefreshToken = _tokenService.GenerateRefreshToken();
         var newRefreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
 
+        var usuario = new Usuario { Id = userId, Nombre = nombre, Email = email, Rol = rol, BarberoId = barberoId, Estado = estado };
         var token = _tokenService.GenerateAccessToken(usuario);
 
-        var userId = usuario.Id;
         _ = Task.Run(async () =>
         {
             try
             {
-                await using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
-                await using var cmd = new NpgsqlCommand(
-                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
-                cmd.Parameters.AddWithValue("@rt", newRefreshToken);
-                cmd.Parameters.AddWithValue("@rte", newRefreshTokenExpiry);
-                cmd.Parameters.AddWithValue("@id", userId);
-                await cmd.ExecuteNonQueryAsync();
+                await using var c = new NpgsqlConnection(_connectionString);
+                await c.OpenAsync();
+                await using var u = new NpgsqlCommand(
+                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", c);
+                u.Parameters.AddWithValue("@rt", newRefreshToken);
+                u.Parameters.AddWithValue("@rte", newRefreshTokenExpiry);
+                u.Parameters.AddWithValue("@id", userId);
+                await u.ExecuteNonQueryAsync();
             }
             catch { }
         });
@@ -164,12 +201,12 @@ public class AuthController : ControllerBase
             ExpiresAt = _tokenService.GetAccessTokenExpiration(),
             Usuario = new UsuarioResponseDto
             {
-                Id = usuario.Id,
-                Nombre = usuario.Nombre,
-                Email = usuario.Email,
-                Rol = usuario.Rol,
-                BarberoId = usuario.BarberoId,
-                Estado = usuario.Estado
+                Id = userId,
+                Nombre = nombre,
+                Email = email,
+                Rol = rol,
+                BarberoId = barberoId,
+                Estado = estado
             }
         });
     }

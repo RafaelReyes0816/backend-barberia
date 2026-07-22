@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using BarberPro.Data;
 using BarberPro.DTOs.Dashboard;
 
@@ -13,10 +13,12 @@ namespace BarberPro.Controllers;
 public class DashboardController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly string _connectionString;
 
-    public DashboardController(AppDbContext context)
+    public DashboardController(AppDbContext context, IConfiguration configuration)
     {
         _context = context;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
     }
 
     [HttpGet("stats")]
@@ -24,20 +26,29 @@ public class DashboardController : ControllerBase
     public async Task<ActionResult<DashboardStatsDto>> GetStats()
     {
         var hoy = DateTime.UtcNow.Date;
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT
+                COUNT(*) FILTER (WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
+                COUNT(*) FILTER (WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
+                COUNT(*) FILTER (WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
+                COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                COALESCE(SUM(s.""Precio"") FILTER (WHERE c.""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""
+            FROM ""Citas"" c
+            JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id""", conn);
+        cmd.Parameters.AddWithValue("@hoy", hoy);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        await reader.ReadAsync();
 
-        var stats = new DashboardStatsDto
+        return Ok(new DashboardStatsDto
         {
-            CitasPendientes = await _context.Citas.CountAsync(c => c.Estado == "Pendiente"),
-            CitasConfirmadas = await _context.Citas.CountAsync(c => c.Estado == "Confirmada"),
-            CitasCompletadas = await _context.Citas.CountAsync(c => (c.Estado == "Completada" || c.Estado == "Terminada") && c.Fecha.Date == hoy),
-            CitasHoy = await _context.Citas.CountAsync(c => c.Fecha.Date == hoy && c.Estado != "Inactivo"),
-            TotalRecaudadoHoy = await _context.Citas
-                .Where(c => c.Fecha.Date == hoy && (c.Estado == "Completada" || c.Estado == "Terminada"))
-                .Join(_context.Servicios, c => c.ServicioId, s => s.Id, (c, s) => s.Precio)
-                .SumAsync(p => p)
-        };
-
-        return Ok(stats);
+            CitasPendientes = reader.GetInt32(0),
+            CitasConfirmadas = reader.GetInt32(1),
+            CitasCompletadas = reader.GetInt32(2),
+            CitasHoy = reader.GetInt32(3),
+            TotalRecaudadoHoy = reader.GetDecimal(4)
+        });
     }
 
     [HttpGet("stats-personales")]
@@ -45,22 +56,28 @@ public class DashboardController : ControllerBase
     public async Task<ActionResult<DashboardStatsPersonalesDto>> GetStatsPersonales()
     {
         var barberoId = int.Parse(User.FindFirstValue("BarberoId") ?? "0");
-        var hoy = DateTime.UtcNow.Date;
-
         if (barberoId == 0)
             return BadRequest(new { mensaje = "No se encontró el barbero asociado" });
 
-        var stats = new DashboardStatsPersonalesDto
-        {
-            CitasHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
-                && c.Fecha.Date == hoy && c.Estado != "Inactivo"),
-            CitasCompletadasHoy = await _context.Citas.CountAsync(c => c.BarberoId == barberoId
-                && c.Fecha.Date == hoy
-                && (c.Estado == "Completada" || c.Estado == "Terminada")),
-            TotalCitas = await _context.Citas.CountAsync(c => c.BarberoId == barberoId && c.Estado != "Inactivo")
-        };
+        var hoy = DateTime.UtcNow.Date;
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT
+                COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" IN ('Completada','Terminada')) AS ""citasCompletadasHoy""
+            FROM ""Citas""
+            WHERE ""BarberoId"" = @barberoId", conn);
+        cmd.Parameters.AddWithValue("@barberoId", barberoId);
+        cmd.Parameters.AddWithValue("@hoy", hoy);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        await reader.ReadAsync();
 
-        return Ok(stats);
+        return Ok(new DashboardStatsPersonalesDto
+        {
+            CitasHoy = reader.GetInt32(0),
+            CitasCompletadasHoy = reader.GetInt32(1)
+        });
     }
 
     [HttpGet("buscar")]
@@ -70,27 +87,38 @@ public class DashboardController : ControllerBase
         if (string.IsNullOrWhiteSpace(nombre))
             return Ok(new List<BuscarCitaDto>());
 
-        var citas = await _context.Citas
-            .Include(c => c.Cliente)
-            .Include(c => c.Barbero)
-            .Include(c => c.Servicio)
-            .Where(c => c.Cliente!.Nombre.ToLower().Contains(nombre.ToLower())
-                && c.Estado != "Inactivo")
-            .OrderByDescending(c => c.Fecha)
-            .Select(c => new BuscarCitaDto
-            {
-                CodigoGenerado = c.CodigoGenerado,
-                ClienteNombre = c.Cliente!.Nombre,
-                ClienteTelefono = c.Cliente!.Telefono,
-                BarberoNombre = c.Barbero!.Nombre,
-                ServicioNombre = c.Servicio!.Nombre,
-                ServicioPrecio = c.Servicio!.Precio,
-                Fecha = c.Fecha,
-                Hora = c.Hora.ToString(@"hh\:mm"),
-                Estado = c.Estado
-            })
-            .ToListAsync();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT c.""CodigoGenerado"", cl.""Nombre"", cl.""Telefono"",
+                   b.""Nombre"", s.""Nombre"", s.""Precio"",
+                   c.""Fecha"", to_char(c.""Hora"", 'HH24:MI'), c.""Estado""
+            FROM ""Citas"" c
+            JOIN ""Clientes"" cl ON c.""ClienteId"" = cl.""Id""
+            JOIN ""Barberos"" b ON c.""BarberoId"" = b.""Id""
+            JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id""
+            WHERE cl.""Nombre"" ILIKE @nombre AND c.""Estado"" != 'Inactivo'
+            ORDER BY c.""Fecha"" DESC
+            LIMIT 50", conn);
+        cmd.Parameters.AddWithValue("@nombre", $"%{nombre}%");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
+        var citas = new List<BuscarCitaDto>();
+        while (await reader.ReadAsync())
+        {
+            citas.Add(new BuscarCitaDto
+            {
+                CodigoGenerado = reader.GetString(0),
+                ClienteNombre = reader.GetString(1),
+                ClienteTelefono = reader.GetString(2),
+                BarberoNombre = reader.GetString(3),
+                ServicioNombre = reader.GetString(4),
+                ServicioPrecio = reader.GetDecimal(5),
+                Fecha = reader.GetDateTime(6),
+                Hora = reader.GetString(7),
+                Estado = reader.GetString(8)
+            });
+        }
         return Ok(citas);
     }
 }

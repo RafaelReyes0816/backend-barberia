@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using BarberPro.Data;
 using BarberPro.Dominio;
 using BarberPro.DTOs.Servicios;
@@ -15,50 +16,65 @@ public class ServiciosController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly CodigoService _codigoService;
+    private readonly string _connectionString;
 
-    public ServiciosController(AppDbContext context, CodigoService codigoService)
+    public ServiciosController(AppDbContext context, CodigoService codigoService, IConfiguration configuration)
     {
         _context = context;
         _codigoService = codigoService;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
     }
 
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ServicioResponseDto>>> GetAll()
     {
-        var servicios = await _context.Servicios
-            .Where(s => s.Estado != "Inactivo")
-            .Select(s => new ServicioResponseDto
-            {
-                Codigo = s.Codigo,
-                Nombre = s.Nombre,
-                Precio = s.Precio,
-                Estado = s.Estado,
-                FechaCreacion = s.FechaCreacion
-            })
-            .ToListAsync();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT ""Codigo"", ""Nombre"", ""Precio"", ""Estado"", ""FechaCreacion""
+            FROM ""Servicios""
+            WHERE ""Estado"" != 'Inactivo'
+            ORDER BY ""Nombre""", conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
+        var servicios = new List<ServicioResponseDto>();
+        while (await reader.ReadAsync())
+        {
+            servicios.Add(new ServicioResponseDto
+            {
+                Codigo = reader.GetString(0),
+                Nombre = reader.GetString(1),
+                Precio = reader.GetDecimal(2),
+                Estado = reader.GetString(3),
+                FechaCreacion = reader.GetDateTime(4)
+            });
+        }
         return Ok(servicios);
     }
 
     [HttpGet("{codigo}")]
     public async Task<ActionResult<ServicioResponseDto>> GetByCodigo(string codigo)
     {
-        var servicio = await _context.Servicios
-            .Where(s => s.Codigo == codigo && s.Estado != "Inactivo")
-            .Select(s => new ServicioResponseDto
-            {
-                Codigo = s.Codigo,
-                Nombre = s.Nombre,
-                Precio = s.Precio,
-                Estado = s.Estado,
-                FechaCreacion = s.FechaCreacion
-            })
-            .FirstOrDefaultAsync();
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT ""Codigo"", ""Nombre"", ""Precio"", ""Estado"", ""FechaCreacion""
+            FROM ""Servicios""
+            WHERE ""Codigo"" = @codigo AND ""Estado"" != 'Inactivo'", conn);
+        cmd.Parameters.AddWithValue("@codigo", codigo);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
-        if (servicio == null)
+        if (!await reader.ReadAsync())
             return NotFound(new { mensaje = "Servicio no encontrado" });
 
-        return Ok(servicio);
+        return Ok(new ServicioResponseDto
+        {
+            Codigo = reader.GetString(0),
+            Nombre = reader.GetString(1),
+            Precio = reader.GetDecimal(2),
+            Estado = reader.GetString(3),
+            FechaCreacion = reader.GetDateTime(4)
+        });
     }
 
     [HttpPost]
