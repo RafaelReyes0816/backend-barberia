@@ -1,4 +1,10 @@
 using System.ComponentModel.DataAnnotations;
+using BarberPro.DTOs.Barberos;
+using BarberPro.DTOs.Clientes;
+using BarberPro.DTOs.Servicios;
+using BarberPro.DTOs.Citas;
+using BarberPro.DTOs.Dashboard;
+using BarberPro.DTOs.CierreCaja;
 
 namespace BarberPro.DTOs.Auth;
 
@@ -71,6 +77,26 @@ public class AuthResponseDto
     public string RefreshToken { get; set; } = null!;
     public DateTime ExpiresAt { get; set; }
     public UsuarioResponseDto Usuario { get; set; } = null!;
+}
+
+public class AuthWithInitResponseDto
+{
+    public string Token { get; set; } = null!;
+    public string RefreshToken { get; set; } = null!;
+    public DateTime ExpiresAt { get; set; }
+    public UsuarioResponseDto Usuario { get; set; } = null!;
+    public InitDataDto? InitData { get; set; }
+}
+
+public class InitDataDto
+{
+    public DashboardStatsDto? Stats { get; set; }
+    public DashboardStatsPersonalesDto? BarberoStats { get; set; }
+    public List<BarberoResponseDto> Barberos { get; set; } = new();
+    public List<ServicioResponseDto> Servicios { get; set; } = new();
+    public List<ClienteResponseDto> Clientes { get; set; } = new();
+    public List<CitaResponseDto> Citas { get; set; } = new();
+    public List<CierreCajaResponseDto> CierresCaja { get; set; } = new();
 }
 
 public class RefreshDto
