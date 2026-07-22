@@ -31,6 +31,10 @@ public class BarberosController : ControllerBase
             {
                 Codigo = b.Codigo,
                 Nombre = b.Nombre,
+                Email = _context.Usuarios
+                    .Where(u => u.BarberoId == b.Id && u.Estado == "Activo")
+                    .Select(u => u.Email)
+                    .FirstOrDefault(),
                 Estado = b.Estado,
                 FechaCreacion = b.FechaCreacion
             })
@@ -48,6 +52,10 @@ public class BarberosController : ControllerBase
             {
                 Codigo = b.Codigo,
                 Nombre = b.Nombre,
+                Email = _context.Usuarios
+                    .Where(u => u.BarberoId == b.Id && u.Estado == "Activo")
+                    .Select(u => u.Email)
+                    .FirstOrDefault(),
                 Estado = b.Estado,
                 FechaCreacion = b.FechaCreacion
             })
@@ -63,6 +71,20 @@ public class BarberosController : ControllerBase
     [Authorize(Roles = "Encargado")]
     public async Task<ActionResult<BarberoResponseDto>> Create([FromBody] BarberoRequestDto dto)
     {
+        if (!string.IsNullOrEmpty(dto.Email) && string.IsNullOrEmpty(dto.Password))
+            return BadRequest(new { mensaje = "La contraseña es requerida cuando se provee un email" });
+
+        if (!string.IsNullOrEmpty(dto.Password) && string.IsNullOrEmpty(dto.Email))
+            return BadRequest(new { mensaje = "El email es requerido cuando se provee una contraseña" });
+
+        if (!string.IsNullOrEmpty(dto.Email))
+        {
+            var emailExiste = await _context.Usuarios
+                .AnyAsync(u => u.Email == dto.Email.ToLower() && u.Estado == "Activo");
+            if (emailExiste)
+                return BadRequest(new { mensaje = "Ya existe un usuario con este email" });
+        }
+
         var barbero = new Barbero
         {
             Codigo = await _codigoService.GenerarCodigoBarbero(),
@@ -74,6 +96,23 @@ public class BarberosController : ControllerBase
         _context.Barberos.Add(barbero);
         await _context.SaveChangesAsync();
 
+        if (!string.IsNullOrEmpty(dto.Email) && !string.IsNullOrEmpty(dto.Password))
+        {
+            var usuario = new Usuario
+            {
+                Nombre = dto.Nombre,
+                Email = dto.Email.ToLower(),
+                PasswordHash = PasswordService.HashPassword(dto.Password),
+                Rol = "Barbero",
+                BarberoId = barbero.Id,
+                Estado = "Activo",
+                FechaCreacion = DateTime.UtcNow
+            };
+
+            _context.Usuarios.Add(usuario);
+            await _context.SaveChangesAsync();
+        }
+
         return CreatedAtAction(nameof(GetByCodigo), new { codigo = barbero.Codigo }, new
         {
             mensaje = "Barbero creado exitosamente",
@@ -81,6 +120,7 @@ public class BarberosController : ControllerBase
             {
                 Codigo = barbero.Codigo,
                 Nombre = barbero.Nombre,
+                Email = dto.Email?.ToLower(),
                 Estado = barbero.Estado,
                 FechaCreacion = barbero.FechaCreacion
             }
@@ -98,9 +138,59 @@ public class BarberosController : ControllerBase
             return NotFound(new { mensaje = "Barbero no encontrado" });
 
         barbero.Nombre = dto.NuevoNombre;
+
+        var usuario = await _context.Usuarios
+            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
+        if (usuario != null)
+            usuario.Nombre = dto.NuevoNombre;
+
         await _context.SaveChangesAsync();
 
         return Ok(new { mensaje = "Barbero actualizado exitosamente" });
+    }
+
+    [HttpPost("{codigo}/credenciales")]
+    [Authorize(Roles = "Encargado")]
+    public async Task<IActionResult> AsignarCredenciales(string codigo, [FromBody] BarberoCredencialesDto dto)
+    {
+        var barbero = await _context.Barberos
+            .FirstOrDefaultAsync(b => b.Codigo == codigo && b.Estado != "Inactivo");
+
+        if (barbero == null)
+            return NotFound(new { mensaje = "Barbero no encontrado" });
+
+        var emailExiste = await _context.Usuarios
+            .AnyAsync(u => u.Email == dto.Email.ToLower() && u.Estado == "Activo"
+                && u.BarberoId != barbero.Id);
+        if (emailExiste)
+            return BadRequest(new { mensaje = "Ya existe otro usuario con este email" });
+
+        var usuarioExistente = await _context.Usuarios
+            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
+
+        if (usuarioExistente != null)
+        {
+            usuarioExistente.Email = dto.Email.ToLower();
+            usuarioExistente.PasswordHash = PasswordService.HashPassword(dto.Password);
+        }
+        else
+        {
+            var usuario = new Usuario
+            {
+                Nombre = barbero.Nombre,
+                Email = dto.Email.ToLower(),
+                PasswordHash = PasswordService.HashPassword(dto.Password),
+                Rol = "Barbero",
+                BarberoId = barbero.Id,
+                Estado = "Activo",
+                FechaCreacion = DateTime.UtcNow
+            };
+            _context.Usuarios.Add(usuario);
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { mensaje = "Credenciales actualizadas exitosamente" });
     }
 
     [HttpDelete("{codigo}")]
@@ -114,6 +204,12 @@ public class BarberosController : ControllerBase
             return NotFound(new { mensaje = "Barbero no encontrado" });
 
         barbero.Estado = "Inactivo";
+
+        var usuario = await _context.Usuarios
+            .FirstOrDefaultAsync(u => u.BarberoId == barbero.Id && u.Estado == "Activo");
+        if (usuario != null)
+            usuario.Estado = "Inactivo";
+
         await _context.SaveChangesAsync();
 
         return Ok(new { mensaje = "Barbero eliminado exitosamente" });
