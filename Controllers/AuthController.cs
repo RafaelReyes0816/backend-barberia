@@ -30,7 +30,7 @@ public class AuthController : ControllerBase
     {
         _context = context;
         _tokenService = tokenService;
-        _connectionString = context.Database.GetConnectionString()!;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
     }
 
     private async Task<InitDataDto?> FetchInitDataAsync(string rol, int? barberoId)
@@ -207,6 +207,8 @@ public class AuthController : ControllerBase
         usuario.RefreshToken = refreshToken;
         usuario.RefreshTokenExpiry = refreshTokenExpiry;
         await _context.SaveChangesAsync();
+
+        _context.ChangeTracker.Clear();
 
         var token = _tokenService.GenerateAccessToken(usuario);
 

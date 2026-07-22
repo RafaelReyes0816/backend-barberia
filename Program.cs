@@ -14,6 +14,8 @@ var connectionString = ResolveConnectionString(builder.Configuration);
 if (connectionString is null)
     throw new InvalidOperationException("Sin cadena de conexión a PostgreSQL.");
 
+builder.Configuration["ConnectionStrings:DefaultConnection"] = connectionString;
+
 // DbContext
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
