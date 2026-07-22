@@ -30,13 +30,11 @@ public class DashboardController : ControllerBase
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(@"
             SELECT
-                COUNT(*) FILTER (WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
-                COUNT(*) FILTER (WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
-                COUNT(*) FILTER (WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
-                COUNT(*) FILTER (WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
-                COALESCE(SUM(s.""Precio"") FILTER (WHERE c.""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""
-            FROM ""Citas"" c
-            JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id""", conn);
+                (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Pendiente') AS ""citasPendientes"",
+                (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" = 'Confirmada') AS ""citasConfirmadas"",
+                (SELECT COUNT(*) FROM ""Citas"" WHERE ""Estado"" IN ('Completada','Terminada') AND ""Fecha""::date = @hoy) AS ""citasCompletadas"",
+                (SELECT COUNT(*) FROM ""Citas"" WHERE ""Fecha""::date = @hoy AND ""Estado"" != 'Inactivo') AS ""citasHoy"",
+                COALESCE((SELECT SUM(s.""Precio"") FROM ""Citas"" c JOIN ""Servicios"" s ON c.""ServicioId"" = s.""Id"" WHERE c.""Fecha""::date = @hoy AND c.""Estado"" IN ('Completada','Terminada')), 0) AS ""totalRecaudadoHoy""", conn);
         cmd.Parameters.AddWithValue("@hoy", hoy);
         await using var reader = await cmd.ExecuteReaderAsync();
         await reader.ReadAsync();
