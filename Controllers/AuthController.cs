@@ -36,21 +36,19 @@ public class AuthController : ControllerBase
         var refreshToken = _tokenService.GenerateRefreshToken();
         var refreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
 
-        var usuario = new Usuario
-        {
-            Nombre = dto.Nombre,
-            Email = dto.Email.ToLower(),
-            PasswordHash = PasswordService.HashPassword(dto.Password),
-            Rol = "Encargado",
-            Estado = "Activo",
-            FechaCreacion = DateTime.UtcNow,
-            RefreshToken = refreshToken,
-            RefreshTokenExpiry = refreshTokenExpiry
-        };
+        await using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "INSERT INTO \"Usuarios\" (\"Nombre\", \"Email\", \"PasswordHash\", \"Rol\", \"Estado\", \"FechaCreacion\", \"RefreshToken\", \"RefreshTokenExpiry\") VALUES (@nombre, @email, @hash, 'Encargado', 'Activo', @now, @rt, @rte) RETURNING \"Id\"", conn);
+        cmd.Parameters.AddWithValue("@nombre", dto.Nombre);
+        cmd.Parameters.AddWithValue("@email", dto.Email.ToLower());
+        cmd.Parameters.AddWithValue("@hash", PasswordService.HashPassword(dto.Password));
+        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow);
+        cmd.Parameters.AddWithValue("@rt", refreshToken);
+        cmd.Parameters.AddWithValue("@rte", refreshTokenExpiry);
+        var id = (int)(await cmd.ExecuteScalarAsync())!;
 
-        _context.Usuarios.Add(usuario);
-        await _context.SaveChangesAsync();
-
+        var usuario = new Usuario { Id = id, Nombre = dto.Nombre, Email = dto.Email.ToLower(), Rol = "Encargado" };
         var token = _tokenService.GenerateAccessToken(usuario);
 
         return Ok(new AuthResponseDto
@@ -60,11 +58,11 @@ public class AuthController : ControllerBase
             ExpiresAt = _tokenService.GetAccessTokenExpiration(),
             Usuario = new UsuarioResponseDto
             {
-                Id = usuario.Id,
-                Nombre = usuario.Nombre,
-                Email = usuario.Email,
-                Rol = usuario.Rol,
-                Estado = usuario.Estado
+                Id = id,
+                Nombre = dto.Nombre,
+                Email = dto.Email.ToLower(),
+                Rol = "Encargado",
+                Estado = "Activo"
             }
         });
     }
