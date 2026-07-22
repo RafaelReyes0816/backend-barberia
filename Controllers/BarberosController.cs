@@ -77,14 +77,6 @@ public class BarberosController : ControllerBase
         if (!string.IsNullOrEmpty(dto.Password) && string.IsNullOrEmpty(dto.Email))
             return BadRequest(new { mensaje = "El email es requerido cuando se provee una contraseña" });
 
-        if (!string.IsNullOrEmpty(dto.Email))
-        {
-            var emailExiste = await _context.Usuarios
-                .AnyAsync(u => u.Email == dto.Email.ToLower() && u.Estado == "Activo");
-            if (emailExiste)
-                return BadRequest(new { mensaje = "Ya existe un usuario con este email" });
-        }
-
         var codigo = await _codigoService.GenerarCodigoBarbero();
         var nombre = dto.Nombre;
         var email = dto.Email?.ToLower();
@@ -96,6 +88,14 @@ public class BarberosController : ControllerBase
             {
                 using var scope = HttpContext.RequestServices.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                if (!string.IsNullOrEmpty(email))
+                {
+                    var emailExiste = await ctx.Usuarios
+                        .AnyAsync(u => u.Email == email && u.Estado == "Activo");
+                    if (emailExiste) return;
+                }
+
                 var barbero = new Barbero
                 {
                     Codigo = codigo,
@@ -104,7 +104,6 @@ public class BarberosController : ControllerBase
                     FechaCreacion = DateTime.UtcNow
                 };
                 ctx.Barberos.Add(barbero);
-                await ctx.SaveChangesAsync();
 
                 if (!string.IsNullOrEmpty(email) && !string.IsNullOrEmpty(passwordHash))
                 {
@@ -118,8 +117,9 @@ public class BarberosController : ControllerBase
                         Estado = "Activo",
                         FechaCreacion = DateTime.UtcNow
                     });
-                    await ctx.SaveChangesAsync();
                 }
+
+                await ctx.SaveChangesAsync();
             }
             catch (Exception ex)
             {
