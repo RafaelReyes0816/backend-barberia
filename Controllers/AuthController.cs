@@ -28,6 +28,9 @@ public class AuthController : ControllerBase
         if (existenUsuarios)
             return BadRequest(new { mensaje = "El setup ya fue completado. No se pueden crear más usuarios administradores desde aquí." });
 
+        var refreshToken = _tokenService.GenerateRefreshToken();
+        var refreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
+
         var usuario = new Usuario
         {
             Nombre = dto.Nombre,
@@ -35,14 +38,15 @@ public class AuthController : ControllerBase
             PasswordHash = PasswordService.HashPassword(dto.Password),
             Rol = "Encargado",
             Estado = "Activo",
-            FechaCreacion = DateTime.UtcNow
+            FechaCreacion = DateTime.UtcNow,
+            RefreshToken = refreshToken,
+            RefreshTokenExpiry = refreshTokenExpiry
         };
 
         _context.Usuarios.Add(usuario);
         await _context.SaveChangesAsync();
 
         var token = _tokenService.GenerateAccessToken(usuario);
-        var refreshToken = _tokenService.GenerateRefreshToken();
 
         return Ok(new AuthResponseDto
         {
@@ -69,8 +73,14 @@ public class AuthController : ControllerBase
         if (usuario == null || !PasswordService.VerifyPassword(dto.Password, usuario.PasswordHash))
             return Unauthorized(new { mensaje = "Email o contraseña incorrectos" });
 
-        var token = _tokenService.GenerateAccessToken(usuario);
         var refreshToken = _tokenService.GenerateRefreshToken();
+        var refreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
+
+        usuario.RefreshToken = refreshToken;
+        usuario.RefreshTokenExpiry = refreshTokenExpiry;
+        await _context.SaveChangesAsync();
+
+        var token = _tokenService.GenerateAccessToken(usuario);
 
         string? barberoNombre = null;
         if (usuario.BarberoId.HasValue)
@@ -92,6 +102,44 @@ public class AuthController : ControllerBase
                 Rol = usuario.Rol,
                 BarberoId = usuario.BarberoId,
                 BarberoNombre = barberoNombre,
+                Estado = usuario.Estado
+            }
+        });
+    }
+
+    [HttpPost("refresh")]
+    public async Task<ActionResult> Refresh([FromBody] RefreshDto dto)
+    {
+        if (string.IsNullOrEmpty(dto.RefreshToken))
+            return BadRequest(new { mensaje = "Refresh token requerido" });
+
+        var usuario = await _context.Usuarios
+            .FirstOrDefaultAsync(u => u.Estado == "Activo" && u.RefreshToken == dto.RefreshToken);
+
+        if (usuario == null || !_tokenService.ValidateRefreshToken(usuario, dto.RefreshToken))
+            return Unauthorized(new { mensaje = "Refresh token inválido o expirado" });
+
+        var newRefreshToken = _tokenService.GenerateRefreshToken();
+        var newRefreshTokenExpiry = _tokenService.GetRefreshTokenExpiration();
+
+        usuario.RefreshToken = newRefreshToken;
+        usuario.RefreshTokenExpiry = newRefreshTokenExpiry;
+        await _context.SaveChangesAsync();
+
+        var token = _tokenService.GenerateAccessToken(usuario);
+
+        return Ok(new AuthResponseDto
+        {
+            Token = token,
+            RefreshToken = newRefreshToken,
+            ExpiresAt = _tokenService.GetAccessTokenExpiration(),
+            Usuario = new UsuarioResponseDto
+            {
+                Id = usuario.Id,
+                Nombre = usuario.Nombre,
+                Email = usuario.Email,
+                Rol = usuario.Rol,
+                BarberoId = usuario.BarberoId,
                 Estado = usuario.Estado
             }
         });

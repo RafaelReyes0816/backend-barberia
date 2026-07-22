@@ -73,6 +73,12 @@ public class AuthResponseDto
     public UsuarioResponseDto Usuario { get; set; } = null!;
 }
 
+public class RefreshDto
+{
+    [Required(ErrorMessage = "El refresh token es requerido")]
+    public string RefreshToken { get; set; } = null!;
+}
+
 public class UsuarioResponseDto
 {
     public int Id { get; set; }

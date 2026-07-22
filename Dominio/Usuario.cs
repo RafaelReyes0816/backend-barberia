@@ -36,4 +36,11 @@ public class Usuario
     public string Estado { get; set; } = "Activo";
 
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
+
+    [JsonIgnore]
+    [StringLength(200)]
+    public string? RefreshToken { get; set; }
+
+    [JsonIgnore]
+    public DateTime? RefreshTokenExpiry { get; set; }
 }

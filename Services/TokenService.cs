@@ -55,4 +55,23 @@ public class TokenService
         return DateTime.UtcNow.AddMinutes(
             Convert.ToDouble(_configuration["Jwt:ExpiresInMinutes"] ?? "60"));
     }
+
+    public DateTime GetRefreshTokenExpiration()
+    {
+        return DateTime.UtcNow.AddDays(
+            Convert.ToDouble(_configuration["Jwt:RefreshExpiresInDays"] ?? "7"));
+    }
+
+    public bool IsRefreshTokenValid(Usuario usuario)
+    {
+        return !string.IsNullOrEmpty(usuario.RefreshToken)
+            && usuario.RefreshTokenExpiry.HasValue
+            && usuario.RefreshTokenExpiry.Value > DateTime.UtcNow;
+    }
+
+    public bool ValidateRefreshToken(Usuario usuario, string refreshToken)
+    {
+        return IsRefreshTokenValid(usuario)
+            && usuario.RefreshToken == refreshToken;
+    }
 }
