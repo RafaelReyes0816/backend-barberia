@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using BarberPro.Data;
 using BarberPro.Dominio;
 using BarberPro.DTOs.Auth;
@@ -16,13 +17,13 @@ public class AuthController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly TokenService _tokenService;
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly string _connectionString;
 
-    public AuthController(AppDbContext context, TokenService tokenService, IServiceScopeFactory scopeFactory)
+    public AuthController(AppDbContext context, TokenService tokenService, IConfiguration configuration)
     {
         _context = context;
         _tokenService = tokenService;
-        _scopeFactory = scopeFactory;
+        _connectionString = configuration.GetConnectionString("DefaultConnection")!;
     }
 
     [HttpPost("setup")]
@@ -82,19 +83,19 @@ public class AuthController : ControllerBase
 
         var token = _tokenService.GenerateAccessToken(usuario);
 
+        var userId = usuario.Id;
         _ = Task.Run(async () =>
         {
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var user = await ctx.Usuarios.FindAsync(usuario.Id);
-                if (user != null)
-                {
-                    user.RefreshToken = refreshToken;
-                    user.RefreshTokenExpiry = refreshTokenExpiry;
-                    await ctx.SaveChangesAsync();
-                }
+                await using var conn = new NpgsqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new NpgsqlCommand(
+                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
+                cmd.Parameters.AddWithValue("@rt", refreshToken);
+                cmd.Parameters.AddWithValue("@rte", refreshTokenExpiry);
+                cmd.Parameters.AddWithValue("@id", userId);
+                await cmd.ExecuteNonQueryAsync();
             }
             catch { }
         });
@@ -141,19 +142,19 @@ public class AuthController : ControllerBase
 
         var token = _tokenService.GenerateAccessToken(usuario);
 
+        var userId = usuario.Id;
         _ = Task.Run(async () =>
         {
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var user = await ctx.Usuarios.FindAsync(usuario.Id);
-                if (user != null)
-                {
-                    user.RefreshToken = newRefreshToken;
-                    user.RefreshTokenExpiry = newRefreshTokenExpiry;
-                    await ctx.SaveChangesAsync();
-                }
+                await using var conn = new NpgsqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new NpgsqlCommand(
+                    "UPDATE \"Usuarios\" SET \"RefreshToken\" = @rt, \"RefreshTokenExpiry\" = @rte WHERE \"Id\" = @id", conn);
+                cmd.Parameters.AddWithValue("@rt", newRefreshToken);
+                cmd.Parameters.AddWithValue("@rte", newRefreshTokenExpiry);
+                cmd.Parameters.AddWithValue("@id", userId);
+                await cmd.ExecuteNonQueryAsync();
             }
             catch { }
         });
