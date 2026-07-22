@@ -158,7 +158,7 @@ static string? ResolveConnectionString(IConfiguration configuration)
     if (!string.IsNullOrWhiteSpace(pgHost) && !string.IsNullOrWhiteSpace(pgUser)
         && !string.IsNullOrWhiteSpace(pgPassword) && !string.IsNullOrWhiteSpace(pgDatabase))
     {
-        return $"Host={pgHost};Port={pgPort};Database={pgDatabase};Username={pgUser};Password={pgPassword};SSL Mode=Require;Trust Server Certificate=true;Maximum Pool Size=10;Connection Idle Lifetime=60;Command Timeout=10";
+        return $"Host={pgHost};Port={pgPort};Database={pgDatabase};Username={pgUser};Password={pgPassword};SSL Mode=Require;Trust Server Certificate=true;Maximum Pool Size=20;Minimum Pool Size=2;Connection Idle Lifetime=120;Command Timeout=10";
     }
 
     var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL")
@@ -169,7 +169,7 @@ static string? ResolveConnectionString(IConfiguration configuration)
     {
         var uri = new Uri(databaseUrl);
         var userInfo = uri.UserInfo.Split(':');
-        return $"Host={uri.Host};Port={uri.Port};Database={uri.AbsolutePath.TrimStart('/')};Username={userInfo[0]};Password={userInfo[1]};SSL Mode=Require;Trust Server Certificate=true;Maximum Pool Size=10;Connection Idle Lifetime=60;Command Timeout=10";
+        return $"Host={uri.Host};Port={uri.Port};Database={uri.AbsolutePath.TrimStart('/')};Username={userInfo[0]};Password={userInfo[1]};SSL Mode=Require;Trust Server Certificate=true;Maximum Pool Size=20;Minimum Pool Size=2;Connection Idle Lifetime=120;Command Timeout=10";
     }
 
     return null;
