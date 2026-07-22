@@ -15,11 +15,13 @@ public class BarberosController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly CodigoService _codigoService;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public BarberosController(AppDbContext context, CodigoService codigoService)
+    public BarberosController(AppDbContext context, CodigoService codigoService, IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _codigoService = codigoService;
+        _scopeFactory = scopeFactory;
     }
 
     [HttpGet]
@@ -86,7 +88,7 @@ public class BarberosController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 if (!string.IsNullOrEmpty(email))
@@ -157,7 +159,7 @@ public class BarberosController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var b = await ctx.Barberos.FirstOrDefaultAsync(b => b.Codigo == codigo);
                 if (b != null)
@@ -199,7 +201,7 @@ public class BarberosController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var usuarioExistente = await ctx.Usuarios
                     .FirstOrDefaultAsync(u => u.BarberoId == barberoId && u.Estado == "Activo");
@@ -246,7 +248,7 @@ public class BarberosController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var b = await ctx.Barberos.FirstOrDefaultAsync(b => b.Id == barberoId);
                 if (b != null)

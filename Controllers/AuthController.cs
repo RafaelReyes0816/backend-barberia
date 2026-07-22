@@ -16,11 +16,13 @@ public class AuthController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly TokenService _tokenService;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public AuthController(AppDbContext context, TokenService tokenService)
+    public AuthController(AppDbContext context, TokenService tokenService, IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _tokenService = tokenService;
+        _scopeFactory = scopeFactory;
     }
 
     [HttpPost("setup")]
@@ -84,7 +86,7 @@ public class AuthController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var user = await ctx.Usuarios.FindAsync(usuario.Id);
                 if (user != null)
@@ -143,7 +145,7 @@ public class AuthController : ControllerBase
         {
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
+                using var scope = _scopeFactory.CreateScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var user = await ctx.Usuarios.FindAsync(usuario.Id);
                 if (user != null)
