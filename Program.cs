@@ -9,6 +9,20 @@ using BarberPro.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Kestrel: HTTP (5000) + HTTPS (5001) si hay certificado
+var pfxFile = Path.Combine(Directory.GetCurrentDirectory(), "certs", "cert.pfx");
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5000);
+    if (File.Exists(pfxFile))
+    {
+        options.ListenAnyIP(5001, listenOptions =>
+        {
+            listenOptions.UseHttps(pfxFile, "");
+        });
+    }
+});
+
 // Resolve connection string
 var connectionString = ResolveConnectionString(builder.Configuration);
 if (connectionString is null)
