@@ -7,6 +7,123 @@
 
 ---
 
+## Guía de configuración
+
+### Requisitos previos
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [PostgreSQL 16+](https://www.postgresql.org/download/) (o Docker)
+- Git
+
+### 1. Clonar el repositorio
+
+```bash
+git clone https://github.com/RafaelReyes0816/backend-barberia.git
+cd backend-barberia
+```
+
+### 2. Base de datos
+
+Opción A — PostgreSQL local directo:
+```bash
+# Crear la base de datos (ajustar usuario y contraseña según tu PostgreSQL)
+psql -U postgres -c "CREATE DATABASE barberia;"
+```
+
+Opción B — Docker (recomendado para no interferir con otras BD):
+```bash
+docker run -d \
+  --name barberia-pg \
+  -e POSTGRES_USER=barberia \
+  -E POSTGRES_PASSWORD=barberia123 \
+  -e POSTGRES_DB=barberia \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+### 3. Configurar conexión a la BD
+
+Crear/editar `appsettings.Development.json` (este archivo NO se sube a Git):
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=barberia;Username=barberia;Password=barberia123"
+  },
+  "Jwt": {
+    "Key": "TuClaveSecretaDeAlMenos32CaracteresAquí",
+    "Issuer": "BarberPro",
+    "Audience": "BarberProApp",
+    "ExpiresInMinutes": 60,
+    "RefreshExpiresInDays": 7
+  }
+}
+```
+
+**Nota:** Si usas Docker, el puerto es 5432 y usuario `barberia`. Si usas PostgreSQL local, ajusta puerto (generalmente 5433 o 5432), usuario (`postgres`) y contraseña.
+
+### 4. Aplicar migraciones
+
+```bash
+dotnet ef database update
+```
+
+Esto crea todas las tablas (Barberos, Clientes, Servicios, Citas, Usuarios, RefreshTokens, CierreCaja) y la data inicial.
+
+### 5. Sembrar datos de prueba (opcional)
+
+Si la BD está vacía, insertar datos de prueba:
+```bash
+psql -U barberia -d barberia -c "
+INSERT INTO \"Usuarios\" (\"Nombre\", \"Email\", \"PasswordHash\", \"Rol\", \"Estado\", \"FechaCreacion\")
+VALUES
+  ('Admin', 'admin@barberpro.com', '\$2a\$12\$8SqsImSQKu6AuMkSXn7dr.edDEtpLd1tL70u7qSOvru1RDcyxrdhe', 'Encargado', 'Activo', NOW()),
+  ('Ricardo Gutierrez', 'barb001@barberpro.com', '\$2a\$12\$eCYzIRuKFIGbC8K0PyOC5O7I3l/08H9qBd1q2aloj5gFhubqwwmni', 'Barbero', 'Activo', NOW());
+"
+```
+
+Logins de prueba:
+| Email | Contraseña | Rol |
+|-------|-----------|-----|
+| `admin@barberpro.com` | `admin123` | Encargado |
+| `barb001@barberpro.com` | `barbero123` | Barbero |
+
+### 6. Ejecutar el backend
+
+```bash
+dotnet run
+```
+
+El servidor arranca en:
+- **HTTP:** `http://localhost:5000`
+- **HTTPS:** `https://localhost:5001`
+- **Swagger:** `http://localhost:5000/swagger`
+- **Health check:** `http://localhost:5000/health`
+
+### 7. Probar los endpoints
+
+```bash
+# Login
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@barberpro.com","password":"admin123"}'
+
+# Listar barberos (usar el token del login)
+curl http://localhost:5000/api/barberos \
+  -H "Authorization: Bearer <TU_TOKEN>"
+```
+
+### Variables de entorno (producción)
+
+| Variable | Ejemplo | Descripción |
+|----------|---------|-------------|
+| `ConnectionStrings__DefaultConnection` | `Host=...;Port=...;Database=...` | Cadena de conexión PostgreSQL |
+| `Jwt__Key` | `ClaveSecretaMinimo32Chars` | Clave HMAC-SHA256 para JWT |
+| `Jwt__Issuer` | `BarberPro` | Emisor del token |
+| `Jwt__Audience` | `BarberProApp` | Audiencia del token |
+| `ASPNETCORE_ENVIRONMENT` | `Production` | Entorno de ejecución |
+
+---
+
 ## FASE A — Seguridad y correcciones críticas
 
 Prioridad: **ALTA**. Deben resolverse antes de producción.

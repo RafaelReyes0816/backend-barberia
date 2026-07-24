@@ -10,3 +10,7 @@ appsettings.json
 appsettings.Development.json
 appsettings.Production.json
 certs/
+BarberPro.http
+logs/
+*.md
+!PLAN-MEJORAS.md
